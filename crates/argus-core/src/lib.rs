@@ -83,6 +83,7 @@ impl Provider for MockProvider {
         let last = req.messages.last().map(|m| m.content.clone()).unwrap_or_default();
         let text = format!("[mock:{}] acknowledged task: {}", req.model, last);
         let usage = Usage {
+            // 近似值：mock 仅统计最后一条消息的词数，足够演示
             prompt_tokens: last.split_whitespace().count() as u64,
             completion_tokens: text.split_whitespace().count() as u64,
         };
@@ -105,5 +106,13 @@ mod tests {
         assert!(resp.text.contains("build a thing"));
         assert!(resp.text.contains("mock:demo"));
         assert_eq!(p.name(), "mock");
+    }
+
+    #[test]
+    fn mock_provider_handles_empty_messages() {
+        let p = MockProvider::new();
+        let req = CompletionRequest { model: "x".into(), messages: vec![] };
+        let resp = p.complete(&req).unwrap();
+        assert!(resp.text.contains("mock:x"));
     }
 }
