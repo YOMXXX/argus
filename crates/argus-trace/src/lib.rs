@@ -31,6 +31,65 @@ pub enum EventKind {
     Note { text: String },
 }
 
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// append-only 的 Trace 写入器，输出开放 JSONL。
+pub struct TraceWriter {
+    file: File,
+    next_step: u64,
+}
+
+impl TraceWriter {
+    /// 在 `path` 创建/打开 trace（append 模式，父目录由调用方负责创建）。
+    pub fn create<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        let file = OpenOptions::new().create(true).append(true).open(path)?;
+        Ok(Self { file, next_step: 0 })
+    }
+
+    /// 记录一个事件：自动分配 step 与时间戳，写入一行 JSON。
+    pub fn record(&mut self, kind: EventKind) -> anyhow::Result<TraceEvent> {
+        let event = TraceEvent { step: self.next_step, ts_ms: now_ms(), kind };
+        self.next_step += 1;
+        let line = serde_json::to_string(&event)?;
+        writeln!(self.file, "{line}")?;
+        self.file.flush()?;
+        Ok(event)
+    }
+
+    /// 本写入器已记录的事件数。
+    pub fn len(&self) -> u64 {
+        self.next_step
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.next_step == 0
+    }
+}
+
+/// 从 JSONL 文件读回完整 trace。
+pub fn read_trace<P: AsRef<Path>>(path: P) -> anyhow::Result<Vec<TraceEvent>> {
+    let reader = BufReader::new(File::open(path)?);
+    let mut events = Vec::new();
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        events.push(serde_json::from_str::<TraceEvent>(&line)?);
+    }
+    Ok(events)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,5 +150,30 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         let back: TraceEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, back);
+    }
+
+    fn tmp_path(tag: &str) -> std::path::PathBuf {
+        let mut p = std::env::temp_dir();
+        p.push(format!("argus-trace-test-{}-{}.jsonl", std::process::id(), tag));
+        let _ = std::fs::remove_file(&p);
+        p
+    }
+
+    #[test]
+    fn writer_assigns_increasing_steps_and_reads_back() {
+        let path = tmp_path("rw");
+        let mut w = TraceWriter::create(&path).unwrap();
+        let e0 = w.record(EventKind::Thought { text: "a".into() }).unwrap();
+        let e1 = w.record(EventKind::Note { text: "b".into() }).unwrap();
+        assert_eq!(e0.step, 0);
+        assert_eq!(e1.step, 1);
+        assert_eq!(w.len(), 2);
+        drop(w);
+
+        let events = read_trace(&path).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, EventKind::Thought { text: "a".into() });
+        assert_eq!(events[1].kind, EventKind::Note { text: "b".into() });
+        let _ = std::fs::remove_file(&path);
     }
 }
