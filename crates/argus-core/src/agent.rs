@@ -21,7 +21,7 @@ impl<'a> Agent<'a> {
     }
 
     /// 运行一次任务，返回模型输出；全过程写入 Trace。
-    pub fn run(&mut self, task: &str) -> anyhow::Result<String> {
+    pub async fn run(&mut self, task: &str) -> anyhow::Result<String> {
         self.trace.record(EventKind::Thought {
             text: format!("Received task: {task}"),
         })?;
@@ -41,7 +41,7 @@ impl<'a> Agent<'a> {
             prompt_tokens,
         })?;
 
-        let resp = self.provider.complete(&req)?;
+        let resp = self.provider.complete(&req).await?;
 
         self.trace.record(EventKind::ModelResponse {
             model: self.model.clone(),
@@ -66,14 +66,14 @@ mod tests {
         p
     }
 
-    #[test]
-    fn agent_run_records_three_events_and_returns_text() {
+    #[tokio::test]
+    async fn agent_run_records_three_events_and_returns_text() {
         let path = tmp_path("run");
         let provider = MockProvider::new();
         {
             let mut trace = TraceWriter::create(&path).unwrap();
             let mut agent = Agent::new(&provider, "demo", &mut trace);
-            let out = agent.run("hello world").unwrap();
+            let out = agent.run("hello world").await.unwrap();
             assert!(out.contains("hello world"));
         }
         let events = read_trace(&path).unwrap();
