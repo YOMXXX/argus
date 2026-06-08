@@ -1,6 +1,10 @@
 //! Argus 黑匣子 Trace —— 开放 JSONL 事件日志。
 
 use serde::{Deserialize, Serialize};
+use std::fs::{File, OpenOptions};
+use std::io::{BufRead, BufReader, Write};
+use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 一条 Trace 事件 —— Argus 黑匣子的原子单位。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -31,11 +35,6 @@ pub enum EventKind {
     Note { text: String },
 }
 
-use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
-
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -51,9 +50,18 @@ pub struct TraceWriter {
 
 impl TraceWriter {
     /// 在 `path` 创建/打开 trace（append 模式，父目录由调用方负责创建）。
+    /// 若文件已存在且含事件，next_step 对齐到已有事件数，保证 step 单调递增续接。
     pub fn create<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        let next_step = if path.as_ref().exists() {
+            BufReader::new(File::open(path.as_ref())?)
+                .lines()
+                .filter(|l| l.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false))
+                .count() as u64
+        } else {
+            0
+        };
         let file = OpenOptions::new().create(true).append(true).open(path)?;
-        Ok(Self { file, next_step: 0 })
+        Ok(Self { file, next_step })
     }
 
     /// 记录一个事件：自动分配 step 与时间戳，写入一行 JSON。
@@ -66,7 +74,7 @@ impl TraceWriter {
         Ok(event)
     }
 
-    /// 本写入器已记录的事件数。
+    /// 已记录的事件数（u64，与 step 序号同类型）。
     pub fn len(&self) -> u64 {
         self.next_step
     }
@@ -77,6 +85,7 @@ impl TraceWriter {
 }
 
 /// 从 JSONL 文件读回完整 trace。
+/// 遇到无法解析的行会立即返回 Err；如需容错跳过损坏行，请在上层处理。
 pub fn read_trace<P: AsRef<Path>>(path: P) -> anyhow::Result<Vec<TraceEvent>> {
     let reader = BufReader::new(File::open(path)?);
     let mut events = Vec::new();
@@ -174,6 +183,23 @@ mod tests {
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].kind, EventKind::Thought { text: "a".into() });
         assert_eq!(events[1].kind, EventKind::Note { text: "b".into() });
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn writer_resumes_step_on_existing_trace() {
+        let path = tmp_path("resume");
+        {
+            let mut w = TraceWriter::create(&path).unwrap();
+            w.record(EventKind::Note { text: "first".into() }).unwrap(); // step 0
+        }
+        let mut w = TraceWriter::create(&path).unwrap();
+        let e = w.record(EventKind::Note { text: "second".into() }).unwrap();
+        assert_eq!(e.step, 1);
+        let events = read_trace(&path).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].step, 0);
+        assert_eq!(events[1].step, 1);
         let _ = std::fs::remove_file(&path);
     }
 }
