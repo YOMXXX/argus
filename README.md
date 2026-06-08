@@ -38,6 +38,62 @@ All of it sits on a **black-box Trace** (open JSONL) that records every thought,
 - 🧩 **Open ecosystem** — native MCP, drop-in skills, your existing project rules.
 - 📜 **Open everything** — open source, open trace format, no vendor lock.
 
+## Install
+
+> Phase 0 — build from source. Prebuilt binaries and a `curl | sh` installer land with v1.0.
+
+```bash
+git clone https://github.com/yourusername/argus argus && cd argus
+cargo build --release
+# binary at target/release/argus
+./target/release/argus --help
+```
+
+Requires a recent stable Rust toolchain (`rustup`/`cargo`/`rustc`).
+
+## Quick start
+
+No API key needed — Phase 0 ships a built-in **mock provider**, so you can see the whole agent loop and the black-box trace immediately:
+
+```bash
+# Run a task. Every step is recorded to an open JSONL trace.
+argus run "add a hello-world endpoint"
+
+# Replay the timeline from the black box.
+argus trace show .argus/trace.jsonl
+```
+
+Example output:
+
+```
+$ argus run "add a hello-world endpoint"
+[mock:mock] acknowledged task: add a hello-world endpoint
+
+$ argus trace show .argus/trace.jsonl
+[   0] THOUGHT  Received task: add a hello-world endpoint
+[   1] MODEL ->  mock (4 prompt tokens)
+[   2] MODEL <-  mock (7 tokens): [mock:mock] acknowledged task: ...
+```
+
+Each step carries a monotonic `step` number — the anchor that time-travel debugging will fork from (Phase 1).
+
+### The black box (trace)
+
+Argus writes every run to a JSONL file — one JSON object per line, one line per step. The format is open: fields include `step`, `kind` (THOUGHT / MODEL_REQUEST / MODEL_RESPONSE / TOOL_CALL / TOOL_RESULT), `timestamp`, and a `payload` that captures the full context at that moment. You can read it with any text editor, pipe it through `jq`, or replay it with `argus trace show`.
+
+Phase 0 capability boundary: real model providers, sandboxed tool execution, the verification gate, the Eval engine, time-travel `fork`, TUI, and MCP/skills import are all coming in Phase 1 and beyond (see Roadmap).
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `argus run <task> [--model M] [--trace PATH]` | Run a task through the agent; record every step to a JSONL trace (default `.argus/trace.jsonl`) |
+| `argus trace show [PATH]` | Replay a recorded trace as a readable timeline |
+| `argus --version` | Print version |
+| `argus --help` | Full help |
+
+> **Coming online next:** real model providers (Anthropic / OpenAI / Google / local / OpenRouter) · sandboxed tool execution · the verification gate · the Eval engine · time-travel `fork` · TUI · MCP & skills import.
+
 ## Roadmap
 
 - **Phase 0** — Core: agent loop · sandbox · provider abstraction · MCP · skills/AGENTS.md compat · TUI · **Trace black box**
