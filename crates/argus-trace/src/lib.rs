@@ -99,6 +99,11 @@ pub fn read_trace<P: AsRef<Path>>(path: P) -> anyhow::Result<Vec<TraceEvent>> {
     Ok(events)
 }
 
+/// 时间旅行的基础：返回 step <= `step` 的事件，用于从某一步 fork 重跑。
+pub fn truncate_at(events: &[TraceEvent], step: u64) -> Vec<TraceEvent> {
+    events.iter().filter(|e| e.step <= step).cloned().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,5 +206,17 @@ mod tests {
         assert_eq!(events[0].step, 0);
         assert_eq!(events[1].step, 1);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn truncate_at_keeps_steps_up_to_target() {
+        let events = vec![
+            TraceEvent { step: 0, ts_ms: 0, kind: EventKind::Note { text: "0".into() } },
+            TraceEvent { step: 1, ts_ms: 0, kind: EventKind::Note { text: "1".into() } },
+            TraceEvent { step: 2, ts_ms: 0, kind: EventKind::Note { text: "2".into() } },
+        ];
+        let cut = truncate_at(&events, 1);
+        assert_eq!(cut.len(), 2);
+        assert_eq!(cut.last().unwrap().step, 1);
     }
 }
