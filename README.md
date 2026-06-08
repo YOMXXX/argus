@@ -102,8 +102,6 @@ Phase 0 capability boundary: real model providers, sandboxed tool execution, the
 - **v1.0** — All four killer features, shipped.
 - **Phase 2** — 24/7 multi-channel runs · lightweight governance · hosted SaaS
 
-See the full design in [`docs/superpowers/specs/`](docs/superpowers/specs/).
-
 ## License
 
 TBD (will be OSI-approved open source).
