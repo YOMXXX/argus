@@ -2,7 +2,7 @@ use anyhow::Result;
 use argus_core::{Agent, MockProvider};
 use argus_trace::{read_trace, EventKind, TraceWriter};
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Argus — the AI coding agent that never blinks.
 #[derive(Parser)]
@@ -55,7 +55,7 @@ fn main() -> Result<()> {
     }
 }
 
-fn run(task: &str, model: &str, trace_path: &PathBuf) -> Result<()> {
+fn run(task: &str, model: &str, trace_path: &Path) -> Result<()> {
     if let Some(parent) = trace_path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
@@ -70,7 +70,7 @@ fn run(task: &str, model: &str, trace_path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn trace_show(path: &PathBuf) -> Result<()> {
+fn trace_show(path: &Path) -> Result<()> {
     let events = read_trace(path)?;
     if events.is_empty() {
         println!("(empty trace)");
