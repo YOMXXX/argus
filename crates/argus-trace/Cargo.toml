@@ -1,0 +1,11 @@
+[package]
+name = "argus-trace"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Argus black-box trace: an open JSONL event log for AI agent runs."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true

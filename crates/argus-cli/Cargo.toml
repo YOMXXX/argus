@@ -1,0 +1,16 @@
+[package]
+name = "argus-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Argus CLI — the AI coding agent that never blinks."
+
+[[bin]]
+name = "argus"
+path = "src/main.rs"
+
+[dependencies]
+argus-core.workspace = true
+argus-trace.workspace = true
+clap.workspace = true
+anyhow.workspace = true
