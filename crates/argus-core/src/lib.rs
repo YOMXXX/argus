@@ -118,6 +118,7 @@ impl<'a> Agent<'a> {
             model: self.model.clone(),
             messages: vec![Message::user(task)],
         };
+        // 发送时的客户端估算（按词数）；真实 token 账单以 provider 返回的 usage 为准。
         let prompt_tokens: u64 = req
             .messages
             .iter()
