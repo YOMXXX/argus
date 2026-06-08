@@ -1,0 +1,25 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Build / debug artifacts
+*.pdb
+
+# Trace black box local output (dev)
+/.argus
+*.trace.jsonl
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# superpowers 工作流产物（设计/计划文档，本地保留、不入库）
+docs/superpowers/
