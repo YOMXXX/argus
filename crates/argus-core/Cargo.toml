@@ -10,3 +10,9 @@ argus-trace.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }
+reqwest.workspace = true
+wiremock.workspace = true
