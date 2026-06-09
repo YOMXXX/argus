@@ -1,5 +1,5 @@
 use anyhow::Result;
-use argus_core::{Agent, AnthropicProvider, MockProvider};
+use argus_core::{task_from_trace, Agent, AnthropicProvider, MockProvider};
 use argus_trace::{read_trace, EventKind, TraceWriter};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
@@ -47,6 +47,18 @@ enum TraceCommands {
         #[arg(default_value = ".argus/trace.jsonl")]
         path: PathBuf,
     },
+    /// Re-run a recorded trace's task with a different provider/model (time travel).
+    Fork {
+        /// Source trace to fork from.
+        path: PathBuf,
+        #[arg(long, default_value = "mock")]
+        provider: String,
+        #[arg(long, default_value = "mock")]
+        model: String,
+        /// Where to write the forked trace.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
 #[tokio::main]
@@ -55,18 +67,20 @@ async fn main() -> Result<()> {
         Commands::Run { task, model, trace, provider } => run(&provider, &task, &model, &trace).await,
         Commands::Trace { command } => match command {
             TraceCommands::Show { path } => trace_show(&path),
+            TraceCommands::Fork { path, provider, model, out } => {
+                trace_fork(&path, &provider, &model, out.as_deref()).await
+            }
         },
     }
 }
 
-async fn run(provider: &str, task: &str, model: &str, trace_path: &Path) -> Result<()> {
+async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path) -> Result<String> {
     if let Some(parent) = trace_path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
         }
     }
     let mut trace = TraceWriter::create(trace_path)?;
-
     let output = match provider {
         "mock" => {
             let p = MockProvider::new();
@@ -84,9 +98,31 @@ async fn run(provider: &str, task: &str, model: &str, trace_path: &Path) -> Resu
         }
         other => anyhow::bail!("unknown provider '{other}' (expected: mock | anthropic)"),
     };
+    Ok(output)
+}
 
+async fn run(provider: &str, task: &str, model: &str, trace_path: &Path) -> Result<()> {
+    let output = run_agent(provider, model, task, trace_path).await?;
     println!("{output}");
     eprintln!("(trace written to {})", trace_path.display());
+    Ok(())
+}
+
+async fn trace_fork(src: &Path, provider: &str, model: &str, out: Option<&Path>) -> Result<()> {
+    let events = read_trace(src)?;
+    let task = task_from_trace(&events).ok_or_else(|| {
+        anyhow::anyhow!(
+            "trace {} has no TaskStarted event; re-run the task to enable fork",
+            src.display()
+        )
+    })?;
+    let out_path = out
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| src.with_extension("fork.jsonl"));
+    eprintln!("forking task from {}: {task:?}", src.display());
+    let output = run_agent(provider, model, &task, &out_path).await?;
+    println!("{output}");
+    eprintln!("(forked trace written to {})", out_path.display());
     Ok(())
 }
 

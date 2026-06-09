@@ -80,3 +80,41 @@ fn run_anthropic_without_key_errors() {
     assert!(stderr.contains("ANTHROPIC_API_KEY not set"), "stderr was: {stderr}");
     let _ = std::fs::remove_file(&trace);
 }
+
+#[test]
+fn fork_reruns_task_from_trace() {
+    let dir = std::env::temp_dir().join(format!("argus-fork-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let orig = dir.join("orig.jsonl");
+    let forked = dir.join("forked.jsonl");
+
+    let run = Command::new(bin())
+        .args(["run", "brew coffee", "--trace"])
+        .arg(&orig)
+        .output()
+        .unwrap();
+    assert!(run.status.success());
+
+    let fork = Command::new(bin())
+        .args(["trace", "fork"])
+        .arg(&orig)
+        .args(["--provider", "mock", "--out"])
+        .arg(&forked)
+        .output()
+        .unwrap();
+    assert!(fork.status.success(), "fork failed: {fork:?}");
+    let fork_out = String::from_utf8_lossy(&fork.stdout);
+    assert!(fork_out.contains("brew coffee"), "fork stdout: {fork_out}");
+
+    let show = Command::new(bin())
+        .args(["trace", "show"])
+        .arg(&forked)
+        .output()
+        .unwrap();
+    let show_out = String::from_utf8_lossy(&show.stdout);
+    assert!(show_out.contains("TASK"), "show: {show_out}");
+    assert!(show_out.contains("brew coffee"), "show: {show_out}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
