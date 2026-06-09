@@ -90,7 +90,20 @@ argus run "explain this repo" --provider anthropic --model claude-3-5-haiku-late
 
 Argus writes every run to a JSONL file — one JSON object per line, one line per step. The format is open: fields include `step`, `ts_ms` (Unix milliseconds), and `kind` — a tagged object whose `type` is one of `thought` / `model_request` / `model_response` / `tool_call` / `tool_result` / `diff` / `verification_gate` / `note`, with variant-specific fields inlined alongside it. Read it with any text editor, pipe it through `jq`, or replay it with `argus trace show`.
 
-Capability boundary: more model providers (beyond Anthropic), sandboxed tool execution, the verification gate, the Eval engine, time-travel `fork`, TUI, and MCP/skills import are still coming (see Roadmap).
+Capability boundary: more model providers (beyond Anthropic), sandboxed tool execution, the verification gate, the Eval engine, TUI, and MCP/skills import are still coming (see Roadmap).
+
+### Time travel (fork & diff)
+
+Re-run any recorded task with a different model or provider, then compare:
+
+```bash
+argus run "refactor this" --trace .argus/a.jsonl                       # original
+argus trace fork .argus/a.jsonl --provider anthropic \
+  --model claude-3-5-haiku-latest --out .argus/b.jsonl                 # re-run with a real model
+argus trace diff .argus/a.jsonl .argus/b.jsonl                         # side-by-side
+```
+
+`fork` reads the original task from the trace's `task_started` event and replays it — the foundation of step-level time-travel debugging (forking from an arbitrary step lands with the multi-turn agent loop).
 
 ## Commands
 
@@ -98,10 +111,12 @@ Capability boundary: more model providers (beyond Anthropic), sandboxed tool exe
 |---|---|
 | `argus run <task> [--provider mock\|anthropic] [--model M] [--trace PATH]` | Run a task through the agent; record every step to a JSONL trace (default `.argus/trace.jsonl`) |
 | `argus trace show [PATH]` | Replay a recorded trace as a readable timeline |
+| `argus trace fork <trace> [--provider P] [--model M] [--out PATH]` | Re-run a trace's task with a different provider/model |
+| `argus trace diff <a> <b>` | Compare two traces step by step |
 | `argus --version` | Print version |
 | `argus --help` | Full help |
 
-> **Coming online next:** more model providers (OpenAI / Google / local / OpenRouter) · sandboxed tool execution · the verification gate · the Eval engine · time-travel `fork` · TUI · MCP & skills import.
+> **Coming online next:** more model providers (OpenAI / Google / local / OpenRouter) · sandboxed tool execution · the verification gate · the Eval engine · TUI · MCP & skills import.
 
 ## Roadmap
 
