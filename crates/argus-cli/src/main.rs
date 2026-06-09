@@ -3,7 +3,7 @@ use argus_core::{
     task_from_trace, Agent, AnthropicProvider, AutoApprover, MockProvider, ReadFile, RunShell,
     WriteFile,
 };
-use argus_core::Approver;
+use argus_core::{Approver, CommandVerifier, Verifier};
 use argus_trace::{read_trace, EventKind, TraceWriter};
 use clap::{Parser, Subcommand};
 use std::io::{BufRead, Write};
@@ -39,6 +39,9 @@ enum Commands {
         /// Auto-approve all tool calls (skip the approval prompt).
         #[arg(long)]
         yes: bool,
+        /// Verification command(s) that must pass before the agent is "done" (repeatable).
+        #[arg(long = "verify")]
+        verify: Vec<String>,
     },
     /// Inspect a recorded trace.
     Trace {
@@ -93,8 +96,8 @@ impl Approver for StdinApprover {
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().command {
-        Commands::Run { task, model, trace, provider, yes } => {
-            run(&provider, &task, &model, &trace, yes).await
+        Commands::Run { task, model, trace, provider, yes, verify } => {
+            run(&provider, &task, &model, &trace, yes, &verify).await
         }
         Commands::Trace { command } => match command {
             TraceCommands::Show { path } => trace_show(&path),
@@ -106,7 +109,7 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path, yes: bool) -> Result<String> {
+async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path, yes: bool, verify: &[String]) -> Result<String> {
     if let Some(parent) = trace_path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
@@ -116,18 +119,21 @@ async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path, y
     let make_approver = || -> Box<dyn Approver> {
         if yes { Box::new(AutoApprover) } else { Box::new(StdinApprover) }
     };
+    let make_verifier = || -> Option<Box<dyn Verifier>> {
+        if verify.is_empty() { None } else { Some(Box::new(CommandVerifier::new(".", verify.to_vec()))) }
+    };
     let output = match provider {
         "mock" => {
             let p = MockProvider::new();
-            Agent::new(&p, model, &mut trace)
+            let mut agent = Agent::new(&p, model, &mut trace)
                 .with_tools(vec![
                     Box::new(ReadFile::new(".")),
                     Box::new(WriteFile::new(".")),
                     Box::new(RunShell::new(".")),
                 ])
-                .with_approver(make_approver())
-                .run(task)
-                .await?
+                .with_approver(make_approver());
+            if let Some(v) = make_verifier() { agent = agent.with_verifier(v); }
+            agent.run(task).await?
         }
         "anthropic" => {
             if model == "mock" {
@@ -137,23 +143,23 @@ async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path, y
                 anyhow::anyhow!("ANTHROPIC_API_KEY not set (required for --provider anthropic)")
             })?;
             let p = AnthropicProvider::new(key);
-            Agent::new(&p, model, &mut trace)
+            let mut agent = Agent::new(&p, model, &mut trace)
                 .with_tools(vec![
                     Box::new(ReadFile::new(".")),
                     Box::new(WriteFile::new(".")),
                     Box::new(RunShell::new(".")),
                 ])
-                .with_approver(make_approver())
-                .run(task)
-                .await?
+                .with_approver(make_approver());
+            if let Some(v) = make_verifier() { agent = agent.with_verifier(v); }
+            agent.run(task).await?
         }
         other => anyhow::bail!("unknown provider '{other}' (expected: mock | anthropic)"),
     };
     Ok(output)
 }
 
-async fn run(provider: &str, task: &str, model: &str, trace_path: &Path, yes: bool) -> Result<()> {
-    let output = run_agent(provider, model, task, trace_path, yes).await?;
+async fn run(provider: &str, task: &str, model: &str, trace_path: &Path, yes: bool, verify: &[String]) -> Result<()> {
+    let output = run_agent(provider, model, task, trace_path, yes, verify).await?;
     println!("{output}");
     eprintln!("(trace written to {})", trace_path.display());
     Ok(())
@@ -171,7 +177,7 @@ async fn trace_fork(src: &Path, provider: &str, model: &str, out: Option<&Path>)
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| src.with_extension("fork.jsonl"));
     eprintln!("forking task from {}: {task:?}", src.display());
-    let output = run_agent(provider, model, &task, &out_path, true).await?;
+    let output = run_agent(provider, model, &task, &out_path, true, &[]).await?;
     println!("{output}");
     eprintln!("(forked trace written to {})", out_path.display());
     Ok(())

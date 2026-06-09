@@ -156,3 +156,24 @@ fn diff_compares_two_traces() {
     assert!(out.contains("≠"), "diff should mark differences: {out}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn verify_gate_blocks_fake_done() {
+    let dir = std::env::temp_dir().join(format!("argus-vg-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let trace = dir.join("t.jsonl");
+    let out = Command::new(bin())
+        .args(["run", "do x", "--yes", "--verify", "false", "--trace"])
+        .arg(&trace)
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "should circuit-break, not crash: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("still failing"), "stdout: {stdout}");
+    let show = Command::new(bin()).args(["trace","show"]).arg(&trace).output().unwrap();
+    let s = String::from_utf8_lossy(&show.stdout);
+    assert!(s.contains("GATE"), "show: {s}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

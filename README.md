@@ -90,7 +90,7 @@ argus run "explain this repo" --provider anthropic --model claude-3-5-haiku-late
 
 Argus writes every run to a JSONL file — one JSON object per line, one line per step. The format is open: fields include `step`, `ts_ms` (Unix milliseconds), and `kind` — a tagged object whose `type` is one of `thought` / `model_request` / `model_response` / `tool_call` / `tool_result` / `diff` / `verification_gate` / `note`, with variant-specific fields inlined alongside it. Read it with any text editor, pipe it through `jq`, or replay it with `argus trace show`.
 
-Capability boundary: more model providers (beyond Anthropic), sandboxed tool execution, the verification gate, the Eval engine, TUI, and MCP/skills import are still coming (see Roadmap).
+Capability boundary: more model providers (beyond Anthropic), sandboxed tool execution, the Eval engine, TUI, and MCP/skills import are still coming (see Roadmap).
 
 ### Time travel (fork & diff)
 
@@ -125,18 +125,29 @@ Shell commands are gated: Argus prints each command and asks `y/N` before runnin
 argus run "run the tests and fix failures" --provider anthropic --model claude-sonnet-4-5 --yes
 ```
 
+### Verification gate (no fake "done")
+
+Make the agent prove it's done. Pass one or more `--verify` commands; before Argus reports success, every command must exit 0 — otherwise the failure is fed back and the agent keeps fixing (up to a few attempts):
+
+```bash
+argus run "make the failing test pass" --provider anthropic --model claude-sonnet-4-5 --yes \
+  --verify "cargo build" --verify "cargo test"
+```
+
+Each gate result is recorded to the trace (`verification_gate`). This is how Argus refuses to claim "done" when it isn't.
+
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `argus run <task> [--provider mock\|anthropic] [--model M] [--trace PATH] [--yes]` | Run a task through the agent; record every step to a JSONL trace (default `.argus/trace.jsonl`); `--yes` auto-approves shell commands |
+| `argus run <task> [--provider mock\|anthropic] [--model M] [--trace PATH] [--yes] [--verify CMD]` | Run a task through the agent; record every step to a JSONL trace (default `.argus/trace.jsonl`); `--yes` auto-approves shell commands; `--verify` gates completion on commands that must exit 0 |
 | `argus trace show [PATH]` | Replay a recorded trace as a readable timeline |
 | `argus trace fork <trace> [--provider P] [--model M] [--out PATH]` | Re-run a trace's task with a different provider/model |
 | `argus trace diff <a> <b>` | Compare two traces step by step |
 | `argus --version` | Print version |
 | `argus --help` | Full help |
 
-> **Coming online next:** more model providers (OpenAI / Google / local / OpenRouter) · sandboxed tool execution · the verification gate · the Eval engine · TUI · MCP & skills import.
+> **Coming online next:** more model providers (OpenAI / Google / local / OpenRouter) · sandboxed tool execution · the Eval engine · TUI · MCP & skills import.
 
 ## Roadmap
 
