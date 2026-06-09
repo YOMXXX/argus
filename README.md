@@ -77,6 +77,15 @@ $ argus trace show .argus/trace.jsonl
 
 Each step carries a monotonic `step` number — the anchor that time-travel debugging will fork from (Phase 1).
 
+### Use a real model (Anthropic)
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+argus run "explain this repo" --provider anthropic --model claude-3-5-haiku-latest
+```
+
+`--provider` defaults to `mock` (zero config). With `--provider anthropic`, Argus calls the Anthropic Messages API (non-streaming) and records **real token usage** into the trace. More providers (OpenAI / Google / local / OpenRouter) are coming — the `Provider` trait is already model-agnostic.
+
 ### The black box (trace)
 
 Argus writes every run to a JSONL file — one JSON object per line, one line per step. The format is open: fields include `step`, `ts_ms` (Unix milliseconds), and `kind` — a tagged object whose `type` is one of `thought` / `model_request` / `model_response` / `tool_call` / `tool_result` / `diff` / `verification_gate` / `note`, with variant-specific fields inlined alongside it. Read it with any text editor, pipe it through `jq`, or replay it with `argus trace show`.
@@ -87,12 +96,12 @@ Phase 0 capability boundary: real model providers, sandboxed tool execution, the
 
 | Command | What it does |
 |---|---|
-| `argus run <task> [--model M] [--trace PATH]` | Run a task through the agent; record every step to a JSONL trace (default `.argus/trace.jsonl`) |
+| `argus run <task> [--provider mock\|anthropic] [--model M] [--trace PATH]` | Run a task through the agent; record every step to a JSONL trace (default `.argus/trace.jsonl`) |
 | `argus trace show [PATH]` | Replay a recorded trace as a readable timeline |
 | `argus --version` | Print version |
 | `argus --help` | Full help |
 
-> **Coming online next:** real model providers (Anthropic / OpenAI / Google / local / OpenRouter) · sandboxed tool execution · the verification gate · the Eval engine · time-travel `fork` · TUI · MCP & skills import.
+> **Coming online next:** more model providers (OpenAI / Google / local / OpenRouter) · sandboxed tool execution · the verification gate · the Eval engine · time-travel `fork` · TUI · MCP & skills import.
 
 ## Roadmap
 

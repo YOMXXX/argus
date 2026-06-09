@@ -233,4 +233,18 @@ mod tests {
         assert!(msg.contains("400"), "err was: {msg}");
         assert!(msg.contains("credit balance is too low"), "err was: {msg}");
     }
+
+    #[tokio::test]
+    #[ignore = "requires ANTHROPIC_API_KEY and network; run with --ignored"]
+    async fn real_anthropic_smoke() {
+        let key = std::env::var("ANTHROPIC_API_KEY").expect("set ANTHROPIC_API_KEY to run");
+        let provider = AnthropicProvider::new(key);
+        let req = CompletionRequest {
+            model: "claude-3-5-haiku-latest".into(),
+            messages: vec![crate::types::Message::user("Reply with exactly: pong")],
+        };
+        let resp = provider.complete(&req).await.unwrap();
+        assert!(!resp.text.is_empty());
+        assert!(resp.usage.completion_tokens > 0);
+    }
 }
