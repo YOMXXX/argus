@@ -1,7 +1,7 @@
 //! Anthropic Messages API provider。
 
 use crate::provider::Provider;
-use crate::types::{CompletionRequest, CompletionResponse, Role, Usage};
+use crate::types::{CompletionRequest, CompletionResponse, Role, StopReason, Usage};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -48,10 +48,11 @@ fn to_anthropic_request(req: &CompletionRequest, max_tokens: u32) -> AnthropicRe
     let mut system_parts = Vec::new();
     let mut messages = Vec::new();
     for m in &req.messages {
+        let text = m.text();
         match m.role {
-            Role::System => system_parts.push(m.content.clone()),
-            Role::User => messages.push(AnthropicMessage { role: "user".into(), content: m.content.clone() }),
-            Role::Assistant => messages.push(AnthropicMessage { role: "assistant".into(), content: m.content.clone() }),
+            Role::System => system_parts.push(text),
+            Role::User => messages.push(AnthropicMessage { role: "user".into(), content: text }),
+            Role::Assistant => messages.push(AnthropicMessage { role: "assistant".into(), content: text }),
         }
     }
     let system = if system_parts.is_empty() { None } else { Some(system_parts.join("\n\n")) };
@@ -120,13 +121,11 @@ impl Provider for AnthropicProvider {
             anyhow::bail!("Anthropic API error {status}: {body_text}");
         }
         let parsed: AnthropicResponse = resp.json().await?;
-        // 字段名映射：Anthropic input/output_tokens → 内核 prompt/completion_tokens
         Ok(CompletionResponse {
             text: extract_text(&parsed),
-            usage: Usage {
-                prompt_tokens: parsed.usage.input_tokens,
-                completion_tokens: parsed.usage.output_tokens,
-            },
+            tool_calls: vec![],
+            usage: Usage { prompt_tokens: parsed.usage.input_tokens, completion_tokens: parsed.usage.output_tokens },
+            stop_reason: StopReason::EndTurn,
         })
     }
 }
@@ -143,6 +142,7 @@ mod tests {
         let req = CompletionRequest {
             model: "claude-x".into(),
             messages: vec![Message::system("be terse"), Message::user("hi")],
+            tools: vec![],
         };
         let ar = to_anthropic_request(&req, 1024);
         assert_eq!(ar.system.as_deref(), Some("be terse"));
@@ -156,7 +156,7 @@ mod tests {
 
     #[test]
     fn request_omits_system_when_absent() {
-        let req = CompletionRequest { model: "claude-x".into(), messages: vec![Message::user("hi")] };
+        let req = CompletionRequest { model: "claude-x".into(), messages: vec![Message::user("hi")], tools: vec![] };
         let ar = to_anthropic_request(&req, 16);
         assert!(ar.system.is_none());
         let json = serde_json::to_string(&ar).unwrap();
@@ -168,6 +168,7 @@ mod tests {
         let req = CompletionRequest {
             model: "claude-x".into(),
             messages: vec![Message::system("part1"), Message::system("part2"), Message::user("hi")],
+            tools: vec![],
         };
         let ar = to_anthropic_request(&req, 8);
         assert_eq!(ar.system.as_deref(), Some("part1\n\npart2"));
@@ -207,11 +208,13 @@ mod tests {
         let req = CompletionRequest {
             model: "claude-x".into(),
             messages: vec![crate::types::Message::user("hi")],
+            tools: vec![],
         };
         let resp = provider.complete(&req).await.unwrap();
         assert_eq!(resp.text, "mocked reply");
         assert_eq!(resp.usage.prompt_tokens, 5);
         assert_eq!(resp.usage.completion_tokens, 2);
+        assert!(resp.tool_calls.is_empty());
         assert_eq!(provider.name(), "anthropic");
     }
 
@@ -227,7 +230,7 @@ mod tests {
             .mount(&server)
             .await;
         let provider = AnthropicProvider::with_base_url("k", server.uri());
-        let req = CompletionRequest { model: "claude-x".into(), messages: vec![crate::types::Message::user("hi")] };
+        let req = CompletionRequest { model: "claude-x".into(), messages: vec![crate::types::Message::user("hi")], tools: vec![] };
         let err = provider.complete(&req).await.unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("400"), "err was: {msg}");
@@ -242,6 +245,7 @@ mod tests {
         let req = CompletionRequest {
             model: "claude-3-5-haiku-latest".into(),
             messages: vec![crate::types::Message::user("Reply with exactly: pong")],
+            tools: vec![],
         };
         let resp = provider.complete(&req).await.unwrap();
         assert!(!resp.text.is_empty());

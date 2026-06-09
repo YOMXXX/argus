@@ -30,12 +30,13 @@ impl<'a> Agent<'a> {
         let req = CompletionRequest {
             model: self.model.clone(),
             messages: vec![Message::user(task)],
+            tools: vec![],
         };
         // 发送时的客户端估算（按词数）；真实 token 账单以 provider 返回的 usage 为准。
         let prompt_tokens: u64 = req
             .messages
             .iter()
-            .map(|m| m.content.split_whitespace().count() as u64)
+            .map(|m| m.text().split_whitespace().count() as u64)
             .sum();
         self.trace.record(EventKind::ModelRequest {
             model: self.model.clone(),

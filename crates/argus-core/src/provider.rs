@@ -1,6 +1,6 @@
 //! Provider 抽象与内置 MockProvider。
 
-use crate::types::{CompletionRequest, CompletionResponse, Usage};
+use crate::types::{CompletionRequest, CompletionResponse, StopReason, Usage};
 use async_trait::async_trait;
 
 /// 模型 Provider 抽象 —— "模型无关"的核心接口。
@@ -34,18 +34,13 @@ impl Provider for MockProvider {
     }
 
     async fn complete(&self, req: &CompletionRequest) -> anyhow::Result<CompletionResponse> {
-        let last = req.messages.last().map(|m| m.content.clone()).unwrap_or_default();
+        let last = req.messages.last().map(|m| m.text()).unwrap_or_default();
         let text = format!("[mock:{}] acknowledged task: {}", req.model, last);
         let usage = Usage {
-            // 统计所有消息词数之和，与 Agent 的请求估算口径一致
-            prompt_tokens: req
-                .messages
-                .iter()
-                .map(|m| m.content.split_whitespace().count() as u64)
-                .sum(),
+            prompt_tokens: req.messages.iter().map(|m| m.text().split_whitespace().count() as u64).sum(),
             completion_tokens: text.split_whitespace().count() as u64,
         };
-        Ok(CompletionResponse { text, usage })
+        Ok(CompletionResponse { text, tool_calls: vec![], usage, stop_reason: StopReason::EndTurn })
     }
 }
 
@@ -60,18 +55,23 @@ mod tests {
         let req = CompletionRequest {
             model: "demo".into(),
             messages: vec![Message::user("build a thing")],
+            tools: vec![],
         };
         let resp = p.complete(&req).await.unwrap();
         assert!(resp.text.contains("build a thing"));
         assert!(resp.text.contains("mock:demo"));
+        assert!(resp.tool_calls.is_empty());
+        assert_eq!(resp.stop_reason, StopReason::EndTurn);
         assert_eq!(p.name(), "mock");
     }
 
     #[tokio::test]
     async fn mock_provider_handles_empty_messages() {
         let p = MockProvider::new();
-        let req = CompletionRequest { model: "x".into(), messages: vec![] };
+        let req = CompletionRequest { model: "x".into(), messages: vec![], tools: vec![] };
         let resp = p.complete(&req).await.unwrap();
         assert!(resp.text.contains("mock:x"));
+        assert!(resp.tool_calls.is_empty());
+        assert_eq!(resp.stop_reason, StopReason::EndTurn);
     }
 }
