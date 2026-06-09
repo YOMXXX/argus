@@ -6,5 +6,6 @@ pub mod provider;
 pub mod types;
 
 pub use agent::Agent;
+pub use anthropic::AnthropicProvider;
 pub use provider::{MockProvider, Provider};
 pub use types::{CompletionRequest, CompletionResponse, Message, Role, Usage};

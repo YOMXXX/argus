@@ -1,7 +1,8 @@
 //! Anthropic Messages API provider。
-#![allow(dead_code)] // 临时：DTO/转换将在 P1-Task5 接入 complete() 后被使用，届时移除本行
 
-use crate::types::{CompletionRequest, Role};
+use crate::provider::Provider;
+use crate::types::{CompletionRequest, CompletionResponse, Role, Usage};
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 /// Anthropic /v1/messages 请求体。
@@ -67,10 +68,75 @@ fn extract_text(resp: &AnthropicResponse) -> String {
         .join("")
 }
 
+const ANTHROPIC_VERSION: &str = "2023-06-01";
+const API_KEY_HEADER: &str = "x-api-key";
+const VERSION_HEADER: &str = "anthropic-version";
+// 已知局限：固定上限；较新模型支持更大 max_tokens，后续可改为 per-request 可配置。
+const DEFAULT_MAX_TOKENS: u32 = 4096;
+
+/// 接入 Anthropic Messages API 的 Provider（非流式）。
+pub struct AnthropicProvider {
+    api_key: String,
+    base_url: String,
+    http: reqwest::Client,
+}
+
+impl AnthropicProvider {
+    /// 用 API key 构造，指向官方端点。
+    pub fn new(api_key: impl Into<String>) -> Self {
+        Self::with_base_url(api_key, "https://api.anthropic.com")
+    }
+
+    /// 用自定义 base_url 构造（测试注入 wiremock 用）。
+    pub fn with_base_url(api_key: impl Into<String>, base_url: impl Into<String>) -> Self {
+        Self {
+            api_key: api_key.into(),
+            base_url: base_url.into().trim_end_matches('/').to_string(),
+            http: reqwest::Client::new(),
+        }
+    }
+}
+
+#[async_trait]
+impl Provider for AnthropicProvider {
+    fn name(&self) -> &str {
+        "anthropic"
+    }
+
+    async fn complete(&self, req: &CompletionRequest) -> anyhow::Result<CompletionResponse> {
+        let body = to_anthropic_request(req, DEFAULT_MAX_TOKENS);
+        let url = format!("{}/v1/messages", self.base_url);
+        let resp = self
+            .http
+            .post(url)
+            .header(API_KEY_HEADER, &self.api_key)
+            .header(VERSION_HEADER, ANTHROPIC_VERSION)
+            .json(&body)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body_text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Anthropic API error {status}: {body_text}");
+        }
+        let parsed: AnthropicResponse = resp.json().await?;
+        // 字段名映射：Anthropic input/output_tokens → 内核 prompt/completion_tokens
+        Ok(CompletionResponse {
+            text: extract_text(&parsed),
+            usage: Usage {
+                prompt_tokens: parsed.usage.input_tokens,
+                completion_tokens: parsed.usage.output_tokens,
+            },
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::Message;
+    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[test]
     fn request_moves_system_to_toplevel() {
@@ -115,5 +181,56 @@ mod tests {
         assert_eq!(extract_text(&resp), "Hello world");
         assert_eq!(resp.usage.input_tokens, 11);
         assert_eq!(resp.usage.output_tokens, 3);
+    }
+
+    #[tokio::test]
+    async fn complete_posts_and_parses_via_wiremock() {
+        let server = MockServer::start().await;
+        let body = serde_json::json!({
+            "content": [{"type": "text", "text": "mocked reply"}],
+            "usage": {"input_tokens": 5, "output_tokens": 2}
+        });
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(header("x-api-key", "test-key"))
+            .and(header("anthropic-version", "2023-06-01"))
+            .and(body_json(serde_json::json!({
+                "model": "claude-x",
+                "max_tokens": 4096,
+                "messages": [{"role": "user", "content": "hi"}]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .mount(&server)
+            .await;
+
+        let provider = AnthropicProvider::with_base_url("test-key", server.uri());
+        let req = CompletionRequest {
+            model: "claude-x".into(),
+            messages: vec![crate::types::Message::user("hi")],
+        };
+        let resp = provider.complete(&req).await.unwrap();
+        assert_eq!(resp.text, "mocked reply");
+        assert_eq!(resp.usage.prompt_tokens, 5);
+        assert_eq!(resp.usage.completion_tokens, 2);
+        assert_eq!(provider.name(), "anthropic");
+    }
+
+    #[tokio::test]
+    async fn complete_surfaces_api_error_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": "credit balance is too low"}
+            })))
+            .mount(&server)
+            .await;
+        let provider = AnthropicProvider::with_base_url("k", server.uri());
+        let req = CompletionRequest { model: "claude-x".into(), messages: vec![crate::types::Message::user("hi")] };
+        let err = provider.complete(&req).await.unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("400"), "err was: {msg}");
+        assert!(msg.contains("credit balance is too low"), "err was: {msg}");
     }
 }
