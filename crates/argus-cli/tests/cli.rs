@@ -118,3 +118,23 @@ fn fork_reruns_task_from_trace() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn diff_compares_two_traces() {
+    let dir = std::env::temp_dir().join(format!("argus-diff-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let a = dir.join("a.jsonl");
+    let b = dir.join("b.jsonl");
+    for (p, t) in [(&a, "task one"), (&b, "task two")] {
+        let o = Command::new(bin()).args(["run", t, "--trace"]).arg(p).output().unwrap();
+        assert!(o.status.success());
+    }
+    let diff = Command::new(bin()).args(["trace", "diff"]).arg(&a).arg(&b).output().unwrap();
+    assert!(diff.status.success(), "diff failed: {diff:?}");
+    let out = String::from_utf8_lossy(&diff.stdout);
+    assert!(out.contains("task one"), "diff: {out}");
+    assert!(out.contains("task two"), "diff: {out}");
+    assert!(out.contains("≠"), "diff should mark differences: {out}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

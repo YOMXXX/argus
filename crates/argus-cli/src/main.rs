@@ -59,6 +59,13 @@ enum TraceCommands {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Compare two traces step by step (time-travel diff).
+    Diff {
+        /// First trace.
+        a: PathBuf,
+        /// Second trace.
+        b: PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -70,6 +77,7 @@ async fn main() -> Result<()> {
             TraceCommands::Fork { path, provider, model, out } => {
                 trace_fork(&path, &provider, &model, out.as_deref()).await
             }
+            TraceCommands::Diff { a, b } => trace_diff(&a, &b),
         },
     }
 }
@@ -126,6 +134,28 @@ async fn trace_fork(src: &Path, provider: &str, model: &str, out: Option<&Path>)
     Ok(())
 }
 
+fn summarize(kind: &EventKind) -> String {
+    match kind {
+        EventKind::TaskStarted { task } => format!("TASK     {task}"),
+        EventKind::Thought { text } => format!("THOUGHT  {text}"),
+        EventKind::ModelRequest { model, prompt_tokens } => {
+            format!("MODEL ->  {model} ({prompt_tokens} prompt tokens)")
+        }
+        EventKind::ModelResponse { model, prompt_tokens, completion_tokens, text } => {
+            format!("MODEL <-  {model} ({prompt_tokens}+{completion_tokens} tokens): {text}")
+        }
+        EventKind::ToolCall { name, args } => format!("TOOL ->   {name}({args})"),
+        EventKind::ToolResult { name, ok, output } => {
+            format!("TOOL <-   {name} ok={ok}: {output}")
+        }
+        EventKind::Diff { path, .. } => format!("DIFF     {path}"),
+        EventKind::VerificationGate { passed, detail } => {
+            format!("GATE     passed={passed}: {detail}")
+        }
+        EventKind::Note { text } => format!("NOTE     {text}"),
+    }
+}
+
 fn trace_show(path: &Path) -> Result<()> {
     let events = read_trace(path)?;
     if events.is_empty() {
@@ -133,26 +163,22 @@ fn trace_show(path: &Path) -> Result<()> {
         return Ok(());
     }
     for e in &events {
-        let summary = match &e.kind {
-            EventKind::TaskStarted { task } => format!("TASK     {task}"),
-            EventKind::Thought { text } => format!("THOUGHT  {text}"),
-            EventKind::ModelRequest { model, prompt_tokens } => {
-                format!("MODEL ->  {model} ({prompt_tokens} prompt tokens)")
-            }
-            EventKind::ModelResponse { model, prompt_tokens, completion_tokens, text } => {
-                format!("MODEL <-  {model} ({prompt_tokens}+{completion_tokens} tokens): {text}")
-            }
-            EventKind::ToolCall { name, args } => format!("TOOL ->   {name}({args})"),
-            EventKind::ToolResult { name, ok, output } => {
-                format!("TOOL <-   {name} ok={ok}: {output}")
-            }
-            EventKind::Diff { path, .. } => format!("DIFF     {path}"),
-            EventKind::VerificationGate { passed, detail } => {
-                format!("GATE     passed={passed}: {detail}")
-            }
-            EventKind::Note { text } => format!("NOTE     {text}"),
-        };
-        println!("[{:>4}] {summary}", e.step);
+        println!("[{:>4}] {}", e.step, summarize(&e.kind));
+    }
+    Ok(())
+}
+
+fn trace_diff(a_path: &Path, b_path: &Path) -> Result<()> {
+    let a = read_trace(a_path)?;
+    let b = read_trace(b_path)?;
+    let n = a.len().max(b.len());
+    println!("step | A: {} | B: {}", a_path.display(), b_path.display());
+    for i in 0..n {
+        let la = a.get(i).map(|e| summarize(&e.kind)).unwrap_or_else(|| "—".into());
+        let lb = b.get(i).map(|e| summarize(&e.kind)).unwrap_or_else(|| "—".into());
+        let mark = if la == lb { " " } else { "≠" };
+        println!("[{i:>3}] {mark} A: {la}");
+        println!("      {mark} B: {lb}");
     }
     Ok(())
 }
