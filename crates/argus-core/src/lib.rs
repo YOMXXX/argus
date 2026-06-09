@@ -8,12 +8,14 @@ pub mod approver;
 pub mod provider;
 pub mod tool;
 pub mod types;
+pub mod verifier;
 
 pub use agent::Agent;
 pub use anthropic::AnthropicProvider;
 pub use approver::{Approver, AutoApprover};
 pub use provider::{MockProvider, Provider};
 pub use tool::{ReadFile, RunShell, Tool, WriteFile};
+pub use verifier::{CommandVerifier, VerifyResult, Verifier};
 pub use types::{
     CompletionRequest, CompletionResponse, Content, Message, Role, StopReason, ToolCall, ToolSpec,
     Usage,
