@@ -4,12 +4,14 @@ use argus_trace::{EventKind, TraceEvent};
 
 pub mod agent;
 pub(crate) mod anthropic;
+pub mod approver;
 pub mod provider;
 pub mod tool;
 pub mod types;
 
 pub use agent::Agent;
 pub use anthropic::AnthropicProvider;
+pub use approver::{Approver, AutoApprover};
 pub use provider::{MockProvider, Provider};
 pub use tool::{ReadFile, Tool, WriteFile};
 pub use types::{

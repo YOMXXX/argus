@@ -1,5 +1,6 @@
 //! Agent 主循环。
 
+use crate::approver::Approver;
 use crate::provider::Provider;
 use crate::tool::Tool;
 use crate::types::{CompletionRequest, Content, Message, Role, ToolSpec};
@@ -12,15 +13,21 @@ pub struct Agent<'a> {
     trace: &'a mut TraceWriter,
     tools: Vec<Box<dyn Tool>>,
     max_turns: usize,
+    approver: Option<Box<dyn Approver>>,
 }
 
 impl<'a> Agent<'a> {
     pub fn new(provider: &'a dyn Provider, model: impl Into<String>, trace: &'a mut TraceWriter) -> Self {
-        Self { provider, model: model.into(), trace, tools: Vec::new(), max_turns: 8 }
+        Self { provider, model: model.into(), trace, tools: Vec::new(), max_turns: 8, approver: None }
     }
 
     pub fn with_tools(mut self, tools: Vec<Box<dyn Tool>>) -> Self {
         self.tools = tools;
+        self
+    }
+
+    pub fn with_approver(mut self, approver: Box<dyn Approver>) -> Self {
+        self.approver = Some(approver);
         self
     }
 
@@ -80,7 +87,22 @@ impl<'a> Agent<'a> {
             let mut result_blocks = Vec::new();
             for call in &resp.tool_calls {
                 self.trace.record(EventKind::ToolCall { name: call.name.clone(), args: call.input.to_string() })?;
-                let (output, is_error) = match self.tools.iter().find(|t| t.name() == call.name) {
+                let tool = self.tools.iter().find(|t| t.name() == call.name);
+                let (output, is_error) = match tool {
+                    Some(tool) if tool.requires_approval() => {
+                        let approved = match &self.approver {
+                            Some(a) => a.approve(tool.name(), &call.input.to_string()),
+                            None => false, // 需审批但无审批者：默认拒绝（安全）
+                        };
+                        if approved {
+                            match tool.execute(&call.input).await {
+                                Ok(out) => (out, false),
+                                Err(e) => (format!("error: {e}"), true),
+                            }
+                        } else {
+                            (format!("denied by user: {}", tool.name()), true)
+                        }
+                    }
                     Some(tool) => match tool.execute(&call.input).await {
                         Ok(out) => (out, false),
                         Err(e) => (format!("error: {e}"), true),
@@ -99,8 +121,11 @@ impl<'a> Agent<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::provider::MockProvider;
+    use crate::approver::AutoApprover;
+    use crate::provider::{MockProvider, Provider};
+    use crate::types::{CompletionRequest, CompletionResponse, StopReason, ToolCall, Usage};
     use argus_trace::{read_trace, EventKind, TraceWriter};
+    use async_trait::async_trait;
 
     fn tmp_path(tag: &str) -> std::path::PathBuf {
         let mut p = std::env::temp_dir();
@@ -148,6 +173,63 @@ mod tests {
         assert!(events.iter().any(|e| matches!(e.kind, EventKind::ToolCall { .. })));
         assert!(events.iter().any(|e| matches!(e.kind, EventKind::ToolResult { ok: true, .. })));
         assert!(dir.join("mock.txt").exists(), "tool should have written mock.txt");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // 第一轮调 run_shell(echo)、收到结果后结束的测试用 provider
+    struct ShellOnceProvider;
+    #[async_trait]
+    impl Provider for ShellOnceProvider {
+        fn name(&self) -> &str { "shell-once" }
+        async fn complete(&self, req: &CompletionRequest) -> anyhow::Result<CompletionResponse> {
+            let has_result = req.messages.iter().any(|m| m.content.iter().any(|c| matches!(c, Content::ToolResult { .. })));
+            let usage = Usage { prompt_tokens: 1, completion_tokens: 1 };
+            if !has_result {
+                return Ok(CompletionResponse {
+                    text: String::new(),
+                    tool_calls: vec![ToolCall { id: "s1".into(), name: "run_shell".into(), input: serde_json::json!({"command":"echo hi-shell"}) }],
+                    usage, stop_reason: StopReason::ToolUse,
+                });
+            }
+            Ok(CompletionResponse { text: "done".into(), tool_calls: vec![], usage, stop_reason: StopReason::EndTurn })
+        }
+    }
+
+    #[tokio::test]
+    async fn shell_runs_when_approved() {
+        let dir = std::env::temp_dir().join(format!("argus-shell-ok-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        let provider = ShellOnceProvider;
+        {
+            let mut trace = TraceWriter::create(&path).unwrap();
+            let mut agent = Agent::new(&provider, "m", &mut trace)
+                .with_tools(vec![Box::new(crate::tool::RunShell::new(&dir))])
+                .with_approver(Box::new(AutoApprover));
+            let out = agent.run("run echo").await.unwrap();
+            assert_eq!(out, "done");
+        }
+        let events = read_trace(&path).unwrap();
+        assert!(events.iter().any(|e| matches!(&e.kind, EventKind::ToolResult { ok: true, output, .. } if output.contains("hi-shell"))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn shell_denied_without_approver() {
+        let dir = std::env::temp_dir().join(format!("argus-shell-deny-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.jsonl");
+        let provider = ShellOnceProvider;
+        {
+            let mut trace = TraceWriter::create(&path).unwrap();
+            let mut agent = Agent::new(&provider, "m", &mut trace)
+                .with_tools(vec![Box::new(crate::tool::RunShell::new(&dir))]);
+            let _ = agent.run("run echo").await.unwrap();
+        }
+        let events = read_trace(&path).unwrap();
+        assert!(events.iter().any(|e| matches!(&e.kind, EventKind::ToolResult { ok: false, output, .. } if output.contains("denied"))));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
