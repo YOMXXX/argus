@@ -37,8 +37,12 @@ impl Provider for MockProvider {
         let last = req.messages.last().map(|m| m.content.clone()).unwrap_or_default();
         let text = format!("[mock:{}] acknowledged task: {}", req.model, last);
         let usage = Usage {
-            // 近似值：mock 仅统计最后一条消息的词数，足够演示
-            prompt_tokens: last.split_whitespace().count() as u64,
+            // 统计所有消息词数之和，与 Agent 的请求估算口径一致
+            prompt_tokens: req
+                .messages
+                .iter()
+                .map(|m| m.content.split_whitespace().count() as u64)
+                .sum(),
             completion_tokens: text.split_whitespace().count() as u64,
         };
         Ok(CompletionResponse { text, usage })

@@ -45,6 +45,7 @@ impl<'a> Agent<'a> {
 
         self.trace.record(EventKind::ModelResponse {
             model: self.model.clone(),
+            prompt_tokens: resp.usage.prompt_tokens,
             completion_tokens: resp.usage.completion_tokens,
             text: resp.text.clone(),
         })?;
@@ -80,7 +81,13 @@ mod tests {
         assert_eq!(events.len(), 3);
         assert!(matches!(events[0].kind, EventKind::Thought { .. }));
         assert!(matches!(events[1].kind, EventKind::ModelRequest { .. }));
-        assert!(matches!(events[2].kind, EventKind::ModelResponse { .. }));
+        match &events[2].kind {
+            EventKind::ModelResponse { prompt_tokens, completion_tokens, .. } => {
+                assert!(*prompt_tokens > 0, "real prompt_tokens should be recorded");
+                assert!(*completion_tokens > 0);
+            }
+            other => panic!("expected ModelResponse, got {other:?}"),
+        }
         let _ = std::fs::remove_file(&path);
     }
 }

@@ -29,6 +29,7 @@ fn run_then_show_roundtrip() {
     let show_out = String::from_utf8_lossy(&show.stdout);
     assert!(show_out.contains("THOUGHT"), "show was: {show_out}");
     assert!(show_out.contains("MODEL"), "show was: {show_out}");
+    assert!(show_out.contains("tokens)"), "MODEL line should show token counts: {show_out}");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

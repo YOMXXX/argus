@@ -23,7 +23,13 @@ pub struct TraceEvent {
 pub enum EventKind {
     Thought { text: String },
     ModelRequest { model: String, prompt_tokens: u64 },
-    ModelResponse { model: String, completion_tokens: u64, text: String },
+    ModelResponse {
+        model: String,
+        #[serde(default)]
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        text: String,
+    },
     ToolCall {
         name: String,
         /// 工具参数，JSON 编码的字符串。
@@ -127,6 +133,7 @@ mod tests {
             ts_ms: 5678,
             kind: EventKind::ModelResponse {
                 model: "claude".into(),
+                prompt_tokens: 11,
                 completion_tokens: 42,
                 text: "done".into(),
             },
@@ -134,6 +141,26 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         let back: TraceEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, back);
+        match &back.kind {
+            EventKind::ModelResponse { prompt_tokens, completion_tokens, .. } => {
+                assert_eq!(*prompt_tokens, 11);
+                assert_eq!(*completion_tokens, 42);
+            }
+            other => panic!("expected ModelResponse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn model_response_without_prompt_tokens_defaults_to_zero() {
+        let raw = r#"{"step":0,"ts_ms":0,"kind":{"type":"model_response","model":"m","completion_tokens":5,"text":"hi"}}"#;
+        let event: TraceEvent = serde_json::from_str(raw).unwrap();
+        match event.kind {
+            EventKind::ModelResponse { prompt_tokens, completion_tokens, .. } => {
+                assert_eq!(prompt_tokens, 0);
+                assert_eq!(completion_tokens, 5);
+            }
+            _ => panic!("expected model_response"),
+        }
     }
 
     #[test]

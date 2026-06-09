@@ -102,8 +102,8 @@ fn trace_show(path: &Path) -> Result<()> {
             EventKind::ModelRequest { model, prompt_tokens } => {
                 format!("MODEL ->  {model} ({prompt_tokens} prompt tokens)")
             }
-            EventKind::ModelResponse { model, completion_tokens, text } => {
-                format!("MODEL <-  {model} ({completion_tokens} tokens): {text}")
+            EventKind::ModelResponse { model, prompt_tokens, completion_tokens, text } => {
+                format!("MODEL <-  {model} ({prompt_tokens}+{completion_tokens} tokens): {text}")
             }
             EventKind::ToolCall { name, args } => format!("TOOL ->   {name}({args})"),
             EventKind::ToolResult { name, ok, output } => {
