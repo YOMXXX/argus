@@ -14,3 +14,4 @@ argus-core.workspace = true
 argus-trace.workspace = true
 clap.workspace = true
 anyhow.workspace = true
+tokio.workspace = true
