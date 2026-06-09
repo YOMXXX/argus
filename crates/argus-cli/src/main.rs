@@ -1,5 +1,5 @@
 use anyhow::Result;
-use argus_core::{Agent, MockProvider};
+use argus_core::{Agent, AnthropicProvider, MockProvider};
 use argus_trace::{read_trace, EventKind, TraceWriter};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
@@ -18,7 +18,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Run a task through the agent (built-in mock provider for now).
+    /// Run a task through the agent.
     Run {
         /// The task for the agent.
         task: String,
@@ -28,6 +28,9 @@ enum Commands {
         /// Where to write the trace (JSONL).
         #[arg(long, default_value = ".argus/trace.jsonl")]
         trace: PathBuf,
+        /// Provider to use. 'mock' needs no API key; 'anthropic' reads ANTHROPIC_API_KEY (pass --model claude-*).
+        #[arg(long, default_value = "mock")]
+        provider: String,
     },
     /// Inspect a recorded trace.
     Trace {
@@ -49,23 +52,39 @@ enum TraceCommands {
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().command {
-        Commands::Run { task, model, trace } => run(&task, &model, &trace).await,
+        Commands::Run { task, model, trace, provider } => run(&provider, &task, &model, &trace).await,
         Commands::Trace { command } => match command {
             TraceCommands::Show { path } => trace_show(&path),
         },
     }
 }
 
-async fn run(task: &str, model: &str, trace_path: &Path) -> Result<()> {
+async fn run(provider: &str, task: &str, model: &str, trace_path: &Path) -> Result<()> {
     if let Some(parent) = trace_path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
         }
     }
-    let provider = MockProvider::new();
     let mut trace = TraceWriter::create(trace_path)?;
-    let mut agent = Agent::new(&provider, model, &mut trace);
-    let output = agent.run(task).await?;
+
+    let output = match provider {
+        "mock" => {
+            let p = MockProvider::new();
+            Agent::new(&p, model, &mut trace).run(task).await?
+        }
+        "anthropic" => {
+            if model == "mock" {
+                eprintln!("warning: --model is 'mock'; for Anthropic pass e.g. --model claude-sonnet-4-5");
+            }
+            let key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
+                anyhow::anyhow!("ANTHROPIC_API_KEY not set (required for --provider anthropic)")
+            })?;
+            let p = AnthropicProvider::new(key);
+            Agent::new(&p, model, &mut trace).run(task).await?
+        }
+        other => anyhow::bail!("unknown provider '{other}' (expected: mock | anthropic)"),
+    };
+
     println!("{output}");
     eprintln!("(trace written to {})", trace_path.display());
     Ok(())

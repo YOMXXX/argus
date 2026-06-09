@@ -50,3 +50,32 @@ fn show_empty_trace_prints_placeholder() {
     assert!(out.contains("(empty trace)"), "show was: {out}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn run_rejects_unknown_provider() {
+    let trace = std::env::temp_dir().join(format!("argus-unkprov-{}.jsonl", std::process::id()));
+    let out = Command::new(bin())
+        .args(["run", "x", "--provider", "nope", "--trace"])
+        .arg(&trace)
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "should fail on unknown provider");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("unknown provider"), "stderr was: {stderr}");
+    let _ = std::fs::remove_file(&trace);
+}
+
+#[test]
+fn run_anthropic_without_key_errors() {
+    let trace = std::env::temp_dir().join(format!("argus-nokey-{}.jsonl", std::process::id()));
+    let out = Command::new(bin())
+        .args(["run", "x", "--provider", "anthropic", "--trace"])
+        .arg(&trace)
+        .env_remove("ANTHROPIC_API_KEY")
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "should fail without key");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("ANTHROPIC_API_KEY not set"), "stderr was: {stderr}");
+    let _ = std::fs::remove_file(&trace);
+}
