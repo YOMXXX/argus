@@ -90,7 +90,7 @@ argus run "explain this repo" --provider anthropic --model claude-3-5-haiku-late
 
 Argus writes every run to a JSONL file — one JSON object per line, one line per step. The format is open: fields include `step`, `ts_ms` (Unix milliseconds), and `kind` — a tagged object whose `type` is one of `thought` / `model_request` / `model_response` / `tool_call` / `tool_result` / `diff` / `verification_gate` / `note`, with variant-specific fields inlined alongside it. Read it with any text editor, pipe it through `jq`, or replay it with `argus trace show`.
 
-Phase 0 capability boundary: real model providers, sandboxed tool execution, the verification gate, the Eval engine, time-travel `fork`, TUI, and MCP/skills import are all coming in Phase 1 and beyond (see Roadmap).
+Capability boundary: more model providers (beyond Anthropic), sandboxed tool execution, the verification gate, the Eval engine, time-travel `fork`, TUI, and MCP/skills import are still coming (see Roadmap).
 
 ## Commands
 
