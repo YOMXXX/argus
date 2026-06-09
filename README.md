@@ -105,6 +105,19 @@ argus trace diff .argus/a.jsonl .argus/b.jsonl                         # side-by
 
 `fork` reads the original task from the trace's `task_started` event and replays it — the foundation of step-level time-travel debugging (forking from an arbitrary step lands with the multi-turn agent loop).
 
+### Tools (multi-turn)
+
+Argus runs a real multi-turn loop: the model can call tools, Argus executes them and feeds results back, repeating until done. Phase 3a ships file tools (sandboxed to the working directory):
+
+- `read_file { path }` — read a UTF-8 file
+- `write_file { path, content }` — write a UTF-8 file (creates parents)
+
+```bash
+argus run "read Cargo.toml and summarize it" --provider anthropic --model claude-3-5-haiku-latest
+```
+
+Every tool call is recorded to the trace (`tool_call` / `tool_result`). `run_shell` with an approval gate is coming next.
+
 ## Commands
 
 | Command | What it does |

@@ -37,7 +37,9 @@ impl Provider for MockProvider {
         let has_tool_result = req.messages.iter().any(|m| {
             m.content.iter().any(|c| matches!(c, crate::types::Content::ToolResult { .. }))
         });
-        let last = req.messages.last().map(|m| m.text()).unwrap_or_default();
+        // 取首条消息（原始 user 任务）：多轮时末条可能是 ToolResult（无 Text）。
+        // 前提：messages[0] 为原始任务；若将来在头部前置 system message，需相应调整。
+        let last = req.messages.first().map(|m| m.text()).unwrap_or_default();
         let usage = Usage {
             prompt_tokens: req.messages.iter().map(|m| m.text().split_whitespace().count() as u64).sum(),
             completion_tokens: 4,

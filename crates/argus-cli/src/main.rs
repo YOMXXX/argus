@@ -1,5 +1,5 @@
 use anyhow::Result;
-use argus_core::{task_from_trace, Agent, AnthropicProvider, MockProvider};
+use argus_core::{task_from_trace, Agent, AnthropicProvider, MockProvider, ReadFile, WriteFile};
 use argus_trace::{read_trace, EventKind, TraceWriter};
 use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
@@ -92,7 +92,10 @@ async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path) -
     let output = match provider {
         "mock" => {
             let p = MockProvider::new();
-            Agent::new(&p, model, &mut trace).run(task).await?
+            Agent::new(&p, model, &mut trace)
+                .with_tools(vec![Box::new(ReadFile::new(".")), Box::new(WriteFile::new("."))])
+                .run(task)
+                .await?
         }
         "anthropic" => {
             if model == "mock" {
@@ -102,7 +105,10 @@ async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path) -
                 anyhow::anyhow!("ANTHROPIC_API_KEY not set (required for --provider anthropic)")
             })?;
             let p = AnthropicProvider::new(key);
-            Agent::new(&p, model, &mut trace).run(task).await?
+            Agent::new(&p, model, &mut trace)
+                .with_tools(vec![Box::new(ReadFile::new(".")), Box::new(WriteFile::new("."))])
+                .run(task)
+                .await?
         }
         other => anyhow::bail!("unknown provider '{other}' (expected: mock | anthropic)"),
     };
