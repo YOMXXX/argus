@@ -34,12 +34,29 @@ impl Provider for MockProvider {
     }
 
     async fn complete(&self, req: &CompletionRequest) -> anyhow::Result<CompletionResponse> {
+        let has_tool_result = req.messages.iter().any(|m| {
+            m.content.iter().any(|c| matches!(c, crate::types::Content::ToolResult { .. }))
+        });
         let last = req.messages.last().map(|m| m.text()).unwrap_or_default();
-        let text = format!("[mock:{}] acknowledged task: {}", req.model, last);
         let usage = Usage {
             prompt_tokens: req.messages.iter().map(|m| m.text().split_whitespace().count() as u64).sum(),
-            completion_tokens: text.split_whitespace().count() as u64,
+            completion_tokens: 4,
         };
+        if !req.tools.is_empty() && !has_tool_result {
+            let tool = &req.tools[0];
+            let input = if tool.name == "write_file" {
+                serde_json::json!({"path": "mock.txt", "content": "from mock"})
+            } else {
+                serde_json::json!({"path": "mock.txt"})
+            };
+            return Ok(CompletionResponse {
+                text: String::new(),
+                tool_calls: vec![crate::types::ToolCall { id: "mock-1".into(), name: tool.name.clone(), input }],
+                usage,
+                stop_reason: StopReason::ToolUse,
+            });
+        }
+        let text = format!("[mock:{}] acknowledged task: {}", req.model, last);
         Ok(CompletionResponse { text, tool_calls: vec![], usage, stop_reason: StopReason::EndTurn })
     }
 }
@@ -73,5 +90,23 @@ mod tests {
         assert!(resp.text.contains("mock:x"));
         assert!(resp.tool_calls.is_empty());
         assert_eq!(resp.stop_reason, StopReason::EndTurn);
+    }
+
+    #[tokio::test]
+    async fn mock_returns_tool_use_when_tools_present() {
+        let p = MockProvider::new();
+        let req = CompletionRequest {
+            model: "demo".into(),
+            messages: vec![Message::user("do it")],
+            tools: vec![crate::types::ToolSpec {
+                name: "read_file".into(),
+                description: "read".into(),
+                input_schema: serde_json::json!({}),
+            }],
+        };
+        let resp = p.complete(&req).await.unwrap();
+        assert_eq!(resp.stop_reason, StopReason::ToolUse);
+        assert_eq!(resp.tool_calls.len(), 1);
+        assert_eq!(resp.tool_calls[0].name, "read_file");
     }
 }
