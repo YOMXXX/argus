@@ -1,7 +1,12 @@
 use anyhow::Result;
-use argus_core::{task_from_trace, Agent, AnthropicProvider, MockProvider, ReadFile, WriteFile};
+use argus_core::{
+    task_from_trace, Agent, AnthropicProvider, AutoApprover, MockProvider, ReadFile, RunShell,
+    WriteFile,
+};
+use argus_core::Approver;
 use argus_trace::{read_trace, EventKind, TraceWriter};
 use clap::{Parser, Subcommand};
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
 /// Argus — the AI coding agent that never blinks.
@@ -31,6 +36,9 @@ enum Commands {
         /// Provider to use. 'mock' needs no API key; 'anthropic' reads ANTHROPIC_API_KEY (pass --model claude-*).
         #[arg(long, default_value = "mock")]
         provider: String,
+        /// Auto-approve all tool calls (skip the approval prompt).
+        #[arg(long)]
+        yes: bool,
     },
     /// Inspect a recorded trace.
     Trace {
@@ -68,10 +76,26 @@ enum TraceCommands {
     },
 }
 
+/// 终端审批：打印命令、读 stdin 一行 y/n；非交互/EOF 视为拒绝。
+struct StdinApprover;
+impl Approver for StdinApprover {
+    fn approve(&self, tool_name: &str, args: &str) -> bool {
+        eprint!("[approval] {tool_name} {args}\n  allow? [y/N] ");
+        let _ = std::io::stderr().flush();
+        let mut line = String::new();
+        match std::io::stdin().lock().read_line(&mut line) {
+            Ok(0) | Err(_) => false,
+            Ok(_) => matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"),
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().command {
-        Commands::Run { task, model, trace, provider } => run(&provider, &task, &model, &trace).await,
+        Commands::Run { task, model, trace, provider, yes } => {
+            run(&provider, &task, &model, &trace, yes).await
+        }
         Commands::Trace { command } => match command {
             TraceCommands::Show { path } => trace_show(&path),
             TraceCommands::Fork { path, provider, model, out } => {
@@ -82,18 +106,26 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path) -> Result<String> {
+async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path, yes: bool) -> Result<String> {
     if let Some(parent) = trace_path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
         }
     }
     let mut trace = TraceWriter::create(trace_path)?;
+    let make_approver = || -> Box<dyn Approver> {
+        if yes { Box::new(AutoApprover) } else { Box::new(StdinApprover) }
+    };
     let output = match provider {
         "mock" => {
             let p = MockProvider::new();
             Agent::new(&p, model, &mut trace)
-                .with_tools(vec![Box::new(ReadFile::new(".")), Box::new(WriteFile::new("."))])
+                .with_tools(vec![
+                    Box::new(ReadFile::new(".")),
+                    Box::new(WriteFile::new(".")),
+                    Box::new(RunShell::new(".")),
+                ])
+                .with_approver(make_approver())
                 .run(task)
                 .await?
         }
@@ -106,7 +138,12 @@ async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path) -
             })?;
             let p = AnthropicProvider::new(key);
             Agent::new(&p, model, &mut trace)
-                .with_tools(vec![Box::new(ReadFile::new(".")), Box::new(WriteFile::new("."))])
+                .with_tools(vec![
+                    Box::new(ReadFile::new(".")),
+                    Box::new(WriteFile::new(".")),
+                    Box::new(RunShell::new(".")),
+                ])
+                .with_approver(make_approver())
                 .run(task)
                 .await?
         }
@@ -115,8 +152,8 @@ async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path) -
     Ok(output)
 }
 
-async fn run(provider: &str, task: &str, model: &str, trace_path: &Path) -> Result<()> {
-    let output = run_agent(provider, model, task, trace_path).await?;
+async fn run(provider: &str, task: &str, model: &str, trace_path: &Path, yes: bool) -> Result<()> {
+    let output = run_agent(provider, model, task, trace_path, yes).await?;
     println!("{output}");
     eprintln!("(trace written to {})", trace_path.display());
     Ok(())
@@ -134,7 +171,7 @@ async fn trace_fork(src: &Path, provider: &str, model: &str, out: Option<&Path>)
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| src.with_extension("fork.jsonl"));
     eprintln!("forking task from {}: {task:?}", src.display());
-    let output = run_agent(provider, model, &task, &out_path).await?;
+    let output = run_agent(provider, model, &task, &out_path, true).await?;
     println!("{output}");
     eprintln!("(forked trace written to {})", out_path.display());
     Ok(())

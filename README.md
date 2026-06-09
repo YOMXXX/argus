@@ -111,18 +111,25 @@ Argus runs a real multi-turn loop: the model can call tools, Argus executes them
 
 - `read_file { path }` — read a UTF-8 file
 - `write_file { path, content }` — write a UTF-8 file (creates parents)
+- `run_shell { command }` — run a shell command in the working directory (**requires approval**)
 
 ```bash
 argus run "read Cargo.toml and summarize it" --provider anthropic --model claude-3-5-haiku-latest
 ```
 
-Every tool call is recorded to the trace (`tool_call` / `tool_result`). `run_shell` with an approval gate is coming next.
+Every tool call is recorded to the trace (`tool_call` / `tool_result`).
+
+Shell commands are gated: Argus prints each command and asks `y/N` before running. Pass `--yes` to auto-approve (use with care):
+
+```bash
+argus run "run the tests and fix failures" --provider anthropic --model claude-sonnet-4-5 --yes
+```
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `argus run <task> [--provider mock\|anthropic] [--model M] [--trace PATH]` | Run a task through the agent; record every step to a JSONL trace (default `.argus/trace.jsonl`) |
+| `argus run <task> [--provider mock\|anthropic] [--model M] [--trace PATH] [--yes]` | Run a task through the agent; record every step to a JSONL trace (default `.argus/trace.jsonl`); `--yes` auto-approves shell commands |
 | `argus trace show [PATH]` | Replay a recorded trace as a readable timeline |
 | `argus trace fork <trace> [--provider P] [--model M] [--out PATH]` | Re-run a trace's task with a different provider/model |
 | `argus trace diff <a> <b>` | Compare two traces step by step |

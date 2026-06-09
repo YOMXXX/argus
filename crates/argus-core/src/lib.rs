@@ -13,7 +13,7 @@ pub use agent::Agent;
 pub use anthropic::AnthropicProvider;
 pub use approver::{Approver, AutoApprover};
 pub use provider::{MockProvider, Provider};
-pub use tool::{ReadFile, Tool, WriteFile};
+pub use tool::{ReadFile, RunShell, Tool, WriteFile};
 pub use types::{
     CompletionRequest, CompletionResponse, Content, Message, Role, StopReason, ToolCall, ToolSpec,
     Usage,

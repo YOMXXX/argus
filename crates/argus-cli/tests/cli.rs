@@ -120,6 +120,24 @@ fn fork_reruns_task_from_trace() {
 }
 
 #[test]
+fn run_with_yes_flag_succeeds() {
+    let dir = std::env::temp_dir().join(format!("argus-yes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let trace = dir.join("trace.jsonl");
+
+    let run = Command::new(bin())
+        .args(["run", "x", "--yes", "--trace"])
+        .arg(&trace)
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "run --yes failed: {run:?}");
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(stdout.contains('x'), "stdout was: {stdout}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn diff_compares_two_traces() {
     let dir = std::env::temp_dir().join(format!("argus-diff-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
