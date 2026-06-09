@@ -4,6 +4,7 @@ use crate::approver::Approver;
 use crate::provider::Provider;
 use crate::tool::Tool;
 use crate::types::{CompletionRequest, Content, Message, Role, ToolSpec};
+use crate::verifier::Verifier;
 use argus_trace::{EventKind, TraceWriter};
 
 /// 多轮 Agent：think→model→(工具调用→执行→喂回)*→完成，每步落 Trace。
@@ -14,11 +15,22 @@ pub struct Agent<'a> {
     tools: Vec<Box<dyn Tool>>,
     max_turns: usize,
     approver: Option<Box<dyn Approver>>,
+    verifier: Option<Box<dyn Verifier>>,
+    max_verify_attempts: usize,
 }
 
 impl<'a> Agent<'a> {
     pub fn new(provider: &'a dyn Provider, model: impl Into<String>, trace: &'a mut TraceWriter) -> Self {
-        Self { provider, model: model.into(), trace, tools: Vec::new(), max_turns: 8, approver: None }
+        Self {
+            provider,
+            model: model.into(),
+            trace,
+            tools: Vec::new(),
+            max_turns: 8,
+            approver: None,
+            verifier: None,
+            max_verify_attempts: 3,
+        }
     }
 
     pub fn with_tools(mut self, tools: Vec<Box<dyn Tool>>) -> Self {
@@ -28,6 +40,11 @@ impl<'a> Agent<'a> {
 
     pub fn with_approver(mut self, approver: Box<dyn Approver>) -> Self {
         self.approver = Some(approver);
+        self
+    }
+
+    pub fn with_verifier(mut self, verifier: Box<dyn Verifier>) -> Self {
+        self.verifier = Some(verifier);
         self
     }
 
@@ -45,6 +62,7 @@ impl<'a> Agent<'a> {
         self.trace.record(EventKind::Thought { text: format!("Received task: {task}") })?;
 
         let mut messages = vec![Message::user(task)];
+        let mut verify_attempts = 0usize;
         let specs = self.tool_specs();
 
         for _turn in 0..self.max_turns {
@@ -66,7 +84,32 @@ impl<'a> Agent<'a> {
             })?;
 
             if resp.tool_calls.is_empty() {
-                return Ok(resp.text);
+                // model 认为完成 —— 若有验证护栏，先过验证才算完成
+                match &self.verifier {
+                    None => return Ok(resp.text),
+                    Some(verifier) => {
+                        let vr = verifier.verify().await;
+                        self.trace.record(EventKind::VerificationGate { passed: vr.passed, detail: vr.detail.clone() })?;
+                        if vr.passed {
+                            return Ok(resp.text);
+                        }
+                        verify_attempts += 1;
+                        if verify_attempts >= self.max_verify_attempts {
+                            return Ok(format!(
+                                "{}\n\n[verification still failing after {} attempt(s)]\n{}",
+                                resp.text, self.max_verify_attempts, vr.detail
+                            ));
+                        }
+                        if !resp.text.is_empty() {
+                            messages.push(Message { role: Role::Assistant, content: vec![Content::Text { text: resp.text.clone() }] });
+                        }
+                        messages.push(Message::user(format!(
+                            "Verification failed. Fix the issues and continue.\n{}",
+                            vr.detail
+                        )));
+                        continue;
+                    }
+                }
             }
 
             // 记录 assistant 的 text + tool_use 到历史
@@ -124,6 +167,7 @@ mod tests {
     use crate::approver::AutoApprover;
     use crate::provider::{MockProvider, Provider};
     use crate::types::{CompletionRequest, CompletionResponse, StopReason, ToolCall, Usage};
+    use crate::verifier::{VerifyResult, Verifier};
     use argus_trace::{read_trace, EventKind, TraceWriter};
     use async_trait::async_trait;
 
@@ -231,5 +275,73 @@ mod tests {
         let events = read_trace(&path).unwrap();
         assert!(events.iter().any(|e| matches!(&e.kind, EventKind::ToolResult { ok: false, output, .. } if output.contains("denied"))));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct PassVerifier;
+    #[async_trait]
+    impl Verifier for PassVerifier {
+        async fn verify(&self) -> VerifyResult { VerifyResult { passed: true, detail: "ok".into() } }
+    }
+    struct AlwaysFailVerifier;
+    #[async_trait]
+    impl Verifier for AlwaysFailVerifier {
+        async fn verify(&self) -> VerifyResult { VerifyResult { passed: false, detail: "nope".into() } }
+    }
+    struct FailThenPassVerifier { calls: std::sync::Mutex<u32> }
+    #[async_trait]
+    impl Verifier for FailThenPassVerifier {
+        async fn verify(&self) -> VerifyResult {
+            let mut c = self.calls.lock().unwrap();
+            *c += 1;
+            if *c == 1 { VerifyResult { passed: false, detail: "first fail".into() } }
+            else { VerifyResult { passed: true, detail: "ok".into() } }
+        }
+    }
+
+    #[tokio::test]
+    async fn gate_passes_returns_done() {
+        let path = tmp_path("gate-pass");
+        let provider = MockProvider::new();
+        {
+            let mut trace = TraceWriter::create(&path).unwrap();
+            let mut agent = Agent::new(&provider, "m", &mut trace).with_verifier(Box::new(PassVerifier));
+            let out = agent.run("do it").await.unwrap();
+            assert!(out.contains("acknowledged"));
+        }
+        let events = read_trace(&path).unwrap();
+        assert!(events.iter().any(|e| matches!(&e.kind, EventKind::VerificationGate { passed: true, .. })));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn gate_fail_then_pass_reprompts() {
+        let path = tmp_path("gate-retry");
+        let provider = MockProvider::new();
+        {
+            let mut trace = TraceWriter::create(&path).unwrap();
+            let mut agent = Agent::new(&provider, "m", &mut trace)
+                .with_verifier(Box::new(FailThenPassVerifier { calls: std::sync::Mutex::new(0) }));
+            let _ = agent.run("do it").await.unwrap();
+        }
+        let events = read_trace(&path).unwrap();
+        assert!(events.iter().any(|e| matches!(&e.kind, EventKind::VerificationGate { passed: false, .. })));
+        assert!(events.iter().any(|e| matches!(&e.kind, EventKind::VerificationGate { passed: true, .. })));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn gate_circuit_breaks_after_max_attempts() {
+        let path = tmp_path("gate-break");
+        let provider = MockProvider::new();
+        {
+            let mut trace = TraceWriter::create(&path).unwrap();
+            let mut agent = Agent::new(&provider, "m", &mut trace).with_verifier(Box::new(AlwaysFailVerifier));
+            let out = agent.run("do it").await.unwrap();
+            assert!(out.contains("still failing"), "out: {out}");
+        }
+        let events = read_trace(&path).unwrap();
+        let fails = events.iter().filter(|e| matches!(&e.kind, EventKind::VerificationGate { passed: false, .. })).count();
+        assert_eq!(fails, 3, "should verify max_verify_attempts(3) times");
+        let _ = std::fs::remove_file(&path);
     }
 }
