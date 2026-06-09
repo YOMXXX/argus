@@ -98,6 +98,7 @@ fn trace_show(path: &Path) -> Result<()> {
     }
     for e in &events {
         let summary = match &e.kind {
+            EventKind::TaskStarted { task } => format!("TASK     {task}"),
             EventKind::Thought { text } => format!("THOUGHT  {text}"),
             EventKind::ModelRequest { model, prompt_tokens } => {
                 format!("MODEL ->  {model} ({prompt_tokens} prompt tokens)")

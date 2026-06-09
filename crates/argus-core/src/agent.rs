@@ -22,6 +22,7 @@ impl<'a> Agent<'a> {
 
     /// 运行一次任务，返回模型输出；全过程写入 Trace。
     pub async fn run(&mut self, task: &str) -> anyhow::Result<String> {
+        self.trace.record(EventKind::TaskStarted { task: task.to_string() })?;
         self.trace.record(EventKind::Thought {
             text: format!("Received task: {task}"),
         })?;
@@ -68,7 +69,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_run_records_three_events_and_returns_text() {
+    async fn agent_run_records_events_and_returns_text() {
         let path = tmp_path("run");
         let provider = MockProvider::new();
         {
@@ -78,12 +79,13 @@ mod tests {
             assert!(out.contains("hello world"));
         }
         let events = read_trace(&path).unwrap();
-        assert_eq!(events.len(), 3);
-        assert!(matches!(events[0].kind, EventKind::Thought { .. }));
-        assert!(matches!(events[1].kind, EventKind::ModelRequest { .. }));
-        match &events[2].kind {
+        assert_eq!(events.len(), 4);
+        assert!(matches!(events[0].kind, EventKind::TaskStarted { .. }));
+        assert!(matches!(events[1].kind, EventKind::Thought { .. }));
+        assert!(matches!(events[2].kind, EventKind::ModelRequest { .. }));
+        match &events[3].kind {
             EventKind::ModelResponse { prompt_tokens, completion_tokens, .. } => {
-                assert!(*prompt_tokens > 0, "real prompt_tokens should be recorded");
+                assert!(*prompt_tokens > 0);
                 assert!(*completion_tokens > 0);
             }
             other => panic!("expected ModelResponse, got {other:?}"),

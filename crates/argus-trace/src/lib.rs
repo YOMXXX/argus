@@ -21,6 +21,8 @@ pub struct TraceEvent {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EventKind {
+    /// 任务开始：记录原始任务文本，供时间旅行 fork 重建。
+    TaskStarted { task: String },
     Thought { text: String },
     ModelRequest { model: String, prompt_tokens: u64 },
     ModelResponse {
@@ -113,6 +115,19 @@ pub fn truncate_at(events: &[TraceEvent], step: u64) -> Vec<TraceEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn task_started_roundtrip() {
+        let event = TraceEvent {
+            step: 0,
+            ts_ms: 0,
+            kind: EventKind::TaskStarted { task: "build X".into() },
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"task_started\""));
+        let back: TraceEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, back);
+    }
 
     #[test]
     fn event_serializes_roundtrip() {
