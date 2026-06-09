@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[async_trait]
 pub trait Tool: Send + Sync {
@@ -10,6 +11,8 @@ pub trait Tool: Send + Sync {
     fn description(&self) -> &str;
     fn input_schema(&self) -> Value;
     async fn execute(&self, input: &Value) -> anyhow::Result<String>;
+    /// 该工具执行前是否需要用户审批（危险操作如执行 shell 命令应返回 true）。
+    fn requires_approval(&self) -> bool { false }
 }
 
 /// 把相对路径限制在 root 之内，拒绝逃逸（.. / 绝对路径越界）。
@@ -73,6 +76,35 @@ impl Tool for WriteFile {
     }
 }
 
+const SHELL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// 在工作目录内执行 shell 命令（`sh -c`），带超时。需审批。
+pub struct RunShell { root: PathBuf }
+impl RunShell { pub fn new(root: impl Into<PathBuf>) -> Self { Self { root: root.into() } } }
+
+#[async_trait]
+impl Tool for RunShell {
+    fn name(&self) -> &str { "run_shell" }
+    fn description(&self) -> &str { "Run a shell command (sh -c) in the working directory. Returns exit code, stdout, stderr." }
+    fn input_schema(&self) -> Value {
+        json!({"type":"object","properties":{"command":{"type":"string"}},"required":["command"],"additionalProperties":false})
+    }
+    fn requires_approval(&self) -> bool { true }
+    async fn execute(&self, input: &Value) -> anyhow::Result<String> {
+        let command = input.get("command").and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("run_shell: missing 'command'"))?;
+        let fut = tokio::process::Command::new("sh")
+            .arg("-c").arg(command)
+            .current_dir(&self.root)
+            .output();
+        let output = tokio::time::timeout(SHELL_TIMEOUT, fut).await
+            .map_err(|_| anyhow::anyhow!("run_shell: timed out after {}s", SHELL_TIMEOUT.as_secs()))??;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Ok(format!("exit: {}\n--- stdout ---\n{}\n--- stderr ---\n{}", output.status, stdout, stderr))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -102,5 +134,22 @@ mod tests {
         let err = r.execute(&json!({"path":"../../etc/passwd"})).await.unwrap_err();
         assert!(format!("{err}").contains("escapes working directory"));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn run_shell_executes_and_captures_output() {
+        let root = tmp_root("shell");
+        let sh = RunShell::new(&root);
+        assert!(sh.requires_approval());
+        let out = sh.execute(&json!({"command":"echo hello-argus"})).await.unwrap();
+        assert!(out.contains("hello-argus"), "out: {out}");
+        assert!(out.contains("exit:"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn read_file_does_not_require_approval() {
+        let r = ReadFile::new(".");
+        assert!(!r.requires_approval());
     }
 }
