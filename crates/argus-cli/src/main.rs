@@ -45,6 +45,12 @@ enum Commands {
         /// Override the provider base URL (OpenAI-compatible endpoints: OpenRouter, local Ollama, …).
         #[arg(long = "base-url")]
         base_url: Option<String>,
+        /// Rules file to load as system prompt (default: auto-discover AGENTS.md / CLAUDE.md).
+        #[arg(long)]
+        rules: Option<PathBuf>,
+        /// Disable auto-discovery of AGENTS.md / CLAUDE.md.
+        #[arg(long = "no-rules")]
+        no_rules: bool,
     },
     /// Inspect a recorded trace.
     Trace {
@@ -136,6 +142,40 @@ impl Approver for StdinApprover {
     }
 }
 
+/// 自动发现工作目录的规则文件(AGENTS.md 优先,其次 CLAUDE.md),返回 (文件名, 内容)。
+fn discover_rules(dir: &Path) -> Option<(String, String)> {
+    for name in ["AGENTS.md", "CLAUDE.md"] {
+        let p = dir.join(name);
+        if let Ok(content) = std::fs::read_to_string(&p) {
+            if !content.trim().is_empty() {
+                return Some((name.to_string(), content));
+            }
+        }
+    }
+    None
+}
+
+/// 解析最终的 system prompt:--no-rules 关闭;--rules <file> 显式;否则自动发现。
+/// 加载成功时往 stderr 打印来源(便于用户确认)。
+fn resolve_rules(rules: Option<&Path>, no_rules: bool) -> Result<Option<String>> {
+    if no_rules {
+        return Ok(None);
+    }
+    if let Some(file) = rules {
+        let content = std::fs::read_to_string(file)
+            .map_err(|e| anyhow::anyhow!("failed to read --rules {}: {e}", file.display()))?;
+        eprintln!("(loaded rules from {})", file.display());
+        return Ok(Some(content));
+    }
+    match discover_rules(Path::new(".")) {
+        Some((name, content)) => {
+            eprintln!("(loaded rules from {name})");
+            Ok(Some(content))
+        }
+        None => Ok(None),
+    }
+}
+
 /// 按名字构造 provider;`base_url` 可覆盖端点(OpenAI 兼容端点如 OpenRouter / 本地 Ollama)。
 fn make_provider(provider: &str, base_url: Option<&str>) -> Result<Box<dyn Provider>> {
     match provider {
@@ -165,8 +205,8 @@ fn make_provider(provider: &str, base_url: Option<&str>) -> Result<Box<dyn Provi
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().command {
-        Commands::Run { task, model, trace, provider, yes, verify, base_url } => {
-            run(&provider, &task, &model, &trace, yes, &verify, base_url.as_deref()).await
+        Commands::Run { task, model, trace, provider, yes, verify, base_url, rules, no_rules } => {
+            run(&provider, &task, &model, &trace, yes, &verify, base_url.as_deref(), rules.as_deref(), no_rules).await
         }
         Commands::Trace { command } => match command {
             TraceCommands::Show { path } => trace_show(&path),
@@ -184,7 +224,8 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path, yes: bool, verify: &[String], base_url: Option<&str>) -> Result<String> {
+#[allow(clippy::too_many_arguments)]
+async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path, yes: bool, verify: &[String], base_url: Option<&str>, system: Option<String>) -> Result<String> {
     if let Some(parent) = trace_path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
@@ -208,14 +249,19 @@ async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path, y
             Box::new(RunShell::new(".")),
         ])
         .with_approver(make_approver());
+    if let Some(s) = system {
+        agent = agent.with_system(s);
+    }
     if let Some(v) = make_verifier() {
         agent = agent.with_verifier(v);
     }
     agent.run(task).await
 }
 
-async fn run(provider: &str, task: &str, model: &str, trace_path: &Path, yes: bool, verify: &[String], base_url: Option<&str>) -> Result<()> {
-    let output = run_agent(provider, model, task, trace_path, yes, verify, base_url).await?;
+#[allow(clippy::too_many_arguments)]
+async fn run(provider: &str, task: &str, model: &str, trace_path: &Path, yes: bool, verify: &[String], base_url: Option<&str>, rules: Option<&Path>, no_rules: bool) -> Result<()> {
+    let system = resolve_rules(rules, no_rules)?;
+    let output = run_agent(provider, model, task, trace_path, yes, verify, base_url, system).await?;
     println!("{output}");
     eprintln!("(trace written to {})", trace_path.display());
     Ok(())
@@ -233,7 +279,7 @@ async fn trace_fork(src: &Path, provider: &str, model: &str, out: Option<&Path>)
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| src.with_extension("fork.jsonl"));
     eprintln!("forking task from {}: {task:?}", src.display());
-    let output = run_agent(provider, model, &task, &out_path, true, &[], None).await?;
+    let output = run_agent(provider, model, &task, &out_path, true, &[], None, None).await?;
     println!("{output}");
     eprintln!("(forked trace written to {})", out_path.display());
     Ok(())

@@ -193,11 +193,22 @@ cost: $0.0123 actual (cheap $0.0021 + strong $0.0102); vs always-strong $0.0150 
 
 The escalation is recorded in the trace as a `route_decision` event (`argus trace show` renders it as a `ROUTE` line). `--verify` is required — it's the objective signal that decides whether the cheap model succeeded. Cost is estimated from real token usage per model.
 
+### Zero-migration: bring your existing rules
+
+Already have an `AGENTS.md` or `CLAUDE.md` in your repo? Argus picks it up automatically and uses it as the system prompt — no setup:
+
+```bash
+argus run "add a test for the parser" --provider anthropic --model claude-sonnet-4-5
+# (loaded rules from AGENTS.md)
+```
+
+Point at a specific file with `--rules <file>`, or turn discovery off with `--no-rules`. (MCP servers and skills import are next on the roadmap.)
+
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `argus run <task> [--provider mock\|anthropic] [--model M] [--trace PATH] [--yes] [--verify CMD]` | Run a task through the agent; record every step to a JSONL trace (default `.argus/trace.jsonl`); `--yes` auto-approves shell commands; `--verify` gates completion on commands that must exit 0 |
+| `argus run <task> [--provider mock\|anthropic] [--model M] [--trace PATH] [--yes] [--verify CMD]` | Run a task through the agent; record every step to a JSONL trace (default `.argus/trace.jsonl`); `--yes` auto-approves shell commands; `--verify` gates completion on commands that must exit 0; auto-loads AGENTS.md/CLAUDE.md as rules (--rules/--no-rules) |
 | `argus trace show [PATH]` | Replay a recorded trace as a readable timeline |
 | `argus trace fork <trace> [--provider P] [--model M] [--out PATH]` | Re-run a trace's task with a different provider/model |
 | `argus trace diff <a> <b>` | Compare two traces step by step |

@@ -301,3 +301,45 @@ fn run_rejects_unknown_provider_lists_openai() {
     assert!(stderr.contains("openai"), "error should list openai as an option: {stderr}");
     let _ = std::fs::remove_file(&trace);
 }
+
+#[test]
+fn run_auto_discovers_agents_md() {
+    let dir = std::env::temp_dir().join(format!("argus-rules-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("AGENTS.md"), "ALWAYS write Rust.").unwrap();
+    let trace = dir.join("t.jsonl");
+
+    let run = Command::new(bin())
+        .args(["run", "do x", "--trace"])
+        .arg(&trace)
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "run failed: {run:?}");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(stderr.contains("AGENTS.md"), "should report loaded rules: {stderr}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn run_no_rules_flag_disables_discovery() {
+    let dir = std::env::temp_dir().join(format!("argus-norules-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("AGENTS.md"), "ALWAYS write Rust.").unwrap();
+    let trace = dir.join("t.jsonl");
+
+    let run = Command::new(bin())
+        .args(["run", "do x", "--no-rules", "--trace"])
+        .arg(&trace)
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(run.status.success());
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!stderr.contains("AGENTS.md"), "should not load rules with --no-rules: {stderr}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
