@@ -17,6 +17,7 @@ pub struct Agent<'a> {
     approver: Option<Box<dyn Approver>>,
     verifier: Option<Box<dyn Verifier>>,
     max_verify_attempts: usize,
+    system: Option<String>,
 }
 
 impl<'a> Agent<'a> {
@@ -30,6 +31,7 @@ impl<'a> Agent<'a> {
             approver: None,
             verifier: None,
             max_verify_attempts: 3,
+            system: None,
         }
     }
 
@@ -48,6 +50,12 @@ impl<'a> Agent<'a> {
         self
     }
 
+    /// 设置 system prompt(如从 AGENTS.md / CLAUDE.md 导入的项目规则)。
+    pub fn with_system(mut self, system: impl Into<String>) -> Self {
+        self.system = Some(system.into());
+        self
+    }
+
     fn tool_specs(&self) -> Vec<ToolSpec> {
         self.tools.iter().map(|t| ToolSpec {
             name: t.name().to_string(),
@@ -61,7 +69,11 @@ impl<'a> Agent<'a> {
         self.trace.record(EventKind::TaskStarted { task: task.to_string() })?;
         self.trace.record(EventKind::Thought { text: format!("Received task: {task}") })?;
 
-        let mut messages = vec![Message::user(task)];
+        let mut messages = Vec::new();
+        if let Some(system) = &self.system {
+            messages.push(Message::system(system.clone()));
+        }
+        messages.push(Message::user(task));
         let mut verify_attempts = 0usize;
         let specs = self.tool_specs();
 
@@ -342,6 +354,53 @@ mod tests {
         let events = read_trace(&path).unwrap();
         let fails = events.iter().filter(|e| matches!(&e.kind, EventKind::VerificationGate { passed: false, .. })).count();
         assert_eq!(fails, 3, "should verify max_verify_attempts(3) times");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    struct CaptureSystemProvider {
+        saw_system: std::sync::Mutex<Option<String>>,
+    }
+    #[async_trait]
+    impl Provider for CaptureSystemProvider {
+        fn name(&self) -> &str { "capture" }
+        async fn complete(&self, req: &CompletionRequest) -> anyhow::Result<CompletionResponse> {
+            let sys = req.messages.iter()
+                .find(|m| matches!(m.role, Role::System))
+                .map(|m| m.text());
+            *self.saw_system.lock().unwrap() = sys;
+            Ok(CompletionResponse {
+                text: "ok".into(),
+                tool_calls: vec![],
+                usage: Usage { prompt_tokens: 1, completion_tokens: 1 },
+                stop_reason: StopReason::EndTurn,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn with_system_injects_system_message() {
+        let path = tmp_path("system");
+        let provider = CaptureSystemProvider { saw_system: std::sync::Mutex::new(None) };
+        {
+            let mut trace = TraceWriter::create(&path).unwrap();
+            let mut agent = Agent::new(&provider, "m", &mut trace).with_system("always be terse");
+            let _ = agent.run("do it").await.unwrap();
+        }
+        let seen = provider.saw_system.lock().unwrap().clone();
+        assert_eq!(seen.as_deref(), Some("always be terse"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn without_system_no_system_message() {
+        let path = tmp_path("nosystem");
+        let provider = CaptureSystemProvider { saw_system: std::sync::Mutex::new(None) };
+        {
+            let mut trace = TraceWriter::create(&path).unwrap();
+            let mut agent = Agent::new(&provider, "m", &mut trace);
+            let _ = agent.run("do it").await.unwrap();
+        }
+        assert!(provider.saw_system.lock().unwrap().is_none());
         let _ = std::fs::remove_file(&path);
     }
 }

@@ -37,9 +37,13 @@ impl Provider for MockProvider {
         let has_tool_result = req.messages.iter().any(|m| {
             m.content.iter().any(|c| matches!(c, crate::types::Content::ToolResult { .. }))
         });
-        // 取首条消息（原始 user 任务）：多轮时末条可能是 ToolResult（无 Text）。
-        // 前提：messages[0] 为原始任务；若将来在头部前置 system message，需相应调整。
-        let last = req.messages.first().map(|m| m.text()).unwrap_or_default();
+        // 取第一条 user 消息作为原始任务：跳过可能前置的 system 消息,也跳过多轮里的 ToolResult。
+        let task_text = req
+            .messages
+            .iter()
+            .find(|m| matches!(m.role, crate::types::Role::User))
+            .map(|m| m.text())
+            .unwrap_or_default();
         let usage = Usage {
             prompt_tokens: req.messages.iter().map(|m| m.text().split_whitespace().count() as u64).sum(),
             completion_tokens: 4,
@@ -58,7 +62,7 @@ impl Provider for MockProvider {
                 stop_reason: StopReason::ToolUse,
             });
         }
-        let text = format!("[mock:{}] acknowledged task: {}", req.model, last);
+        let text = format!("[mock:{}] acknowledged task: {}", req.model, task_text);
         Ok(CompletionResponse { text, tool_calls: vec![], usage, stop_reason: StopReason::EndTurn })
     }
 }
@@ -110,5 +114,18 @@ mod tests {
         assert_eq!(resp.stop_reason, StopReason::ToolUse);
         assert_eq!(resp.tool_calls.len(), 1);
         assert_eq!(resp.tool_calls[0].name, "read_file");
+    }
+
+    #[tokio::test]
+    async fn mock_ignores_system_uses_first_user() {
+        let p = MockProvider::new();
+        let req = CompletionRequest {
+            model: "demo".into(),
+            messages: vec![Message::system("project rules here"), Message::user("build a thing")],
+            tools: vec![],
+        };
+        let resp = p.complete(&req).await.unwrap();
+        assert!(resp.text.contains("build a thing"), "should use first user msg, got: {}", resp.text);
+        assert!(!resp.text.contains("project rules"), "should not echo system: {}", resp.text);
     }
 }
