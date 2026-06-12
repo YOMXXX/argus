@@ -177,3 +177,49 @@ fn verify_gate_blocks_fake_done() {
     assert!(s.contains("GATE"), "show: {s}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn eval_runs_suite_and_reports_pass_rate() {
+    let dir = std::env::temp_dir().join(format!("argus-eval-it-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let suite = dir.join("pass.json");
+    std::fs::write(&suite, r#"{"name":"s","cases":[{"id":"a","task":"do","verify":["true"]}]}"#).unwrap();
+
+    let out = Command::new(bin())
+        .args(["eval"])
+        .arg(&suite)
+        .args(["--out-dir"])
+        .arg(dir.join("out"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "eval failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("[PASS] a"), "stdout: {stdout}");
+    assert!(stdout.contains("1/1 passed"), "stdout: {stdout}");
+    assert!(dir.join("out").join("a.jsonl").exists(), "per-case trace missing");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn eval_exits_nonzero_on_failure() {
+    let dir = std::env::temp_dir().join(format!("argus-eval-fail-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let suite = dir.join("fail.json");
+    std::fs::write(&suite, r#"{"name":"s","cases":[{"id":"a","task":"do","verify":["false"]}]}"#).unwrap();
+
+    let out = Command::new(bin())
+        .args(["eval"])
+        .arg(&suite)
+        .args(["--out-dir"])
+        .arg(dir.join("out"))
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "eval should exit non-zero when a case fails");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("0/1 passed"), "stdout: {stdout}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

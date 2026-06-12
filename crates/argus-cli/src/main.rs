@@ -3,7 +3,7 @@ use argus_core::{
     task_from_trace, Agent, AnthropicProvider, AutoApprover, MockProvider, ReadFile, RunShell,
     WriteFile,
 };
-use argus_core::{Approver, CommandVerifier, Verifier};
+use argus_core::{run_suite, Approver, CommandVerifier, EvalSuite, Verifier};
 use argus_trace::{read_trace, EventKind, TraceWriter};
 use clap::{Parser, Subcommand};
 use std::io::{BufRead, Write};
@@ -47,6 +47,20 @@ enum Commands {
     Trace {
         #[command(subcommand)]
         command: TraceCommands,
+    },
+    /// Run an eval suite: batch-run cases and report pass-rate.
+    Eval {
+        /// Path to the suite JSON file.
+        suite: PathBuf,
+        /// Provider to use ('mock' needs no key; 'anthropic' reads ANTHROPIC_API_KEY).
+        #[arg(long, default_value = "mock")]
+        provider: String,
+        /// Model name (pass claude-* for --provider anthropic).
+        #[arg(long, default_value = "mock")]
+        model: String,
+        /// Directory for per-case traces.
+        #[arg(long = "out-dir", default_value = ".argus/eval")]
+        out_dir: PathBuf,
     },
 }
 
@@ -106,6 +120,9 @@ async fn main() -> Result<()> {
             }
             TraceCommands::Diff { a, b } => trace_diff(&a, &b),
         },
+        Commands::Eval { suite, provider, model, out_dir } => {
+            eval_run(&suite, &provider, &model, &out_dir).await
+        }
     }
 }
 
@@ -228,6 +245,50 @@ fn trace_diff(a_path: &Path, b_path: &Path) -> Result<()> {
         let mark = if la == lb { " " } else { "≠" };
         println!("[{i:>3}] {mark} A: {la}");
         println!("      {mark} B: {lb}");
+    }
+    Ok(())
+}
+
+async fn eval_run(suite_path: &Path, provider: &str, model: &str, out_dir: &Path) -> Result<()> {
+    let text = std::fs::read_to_string(suite_path)
+        .map_err(|e| anyhow::anyhow!("failed to read suite {}: {e}", suite_path.display()))?;
+    let suite: EvalSuite = serde_json::from_str(&text)
+        .map_err(|e| anyhow::anyhow!("invalid suite JSON {}: {e}", suite_path.display()))?;
+    // base_dir = suite 文件所在目录(解析 case 相对 dir);无父目录时用 "."
+    let base_dir = suite_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+
+    let report = match provider {
+        "mock" => {
+            let p = MockProvider::new();
+            run_suite(&suite, base_dir, &p, model, out_dir).await?
+        }
+        "anthropic" => {
+            if model == "mock" {
+                eprintln!("warning: --model is 'mock'; for Anthropic pass e.g. --model claude-sonnet-4-5");
+            }
+            let key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
+                anyhow::anyhow!("ANTHROPIC_API_KEY not set (required for --provider anthropic)")
+            })?;
+            let p = AnthropicProvider::new(key);
+            run_suite(&suite, base_dir, &p, model, out_dir).await?
+        }
+        other => anyhow::bail!("unknown provider '{other}' (expected: mock | anthropic)"),
+    };
+
+    println!("eval: {} ({} case(s))", report.suite_name, report.total());
+    for r in &report.results {
+        let tag = if r.passed { "PASS" } else { "FAIL" };
+        println!("[{tag}] {}  → {}", r.id, r.trace_path.display());
+    }
+    let pct = (report.pass_rate() * 100.0).round() as u64;
+    println!("{}/{} passed ({}%)", report.passed_count(), report.total(), pct);
+
+    // CI gate:有 case 失败 → 退出码非 0(trace 已在 run_suite 内写完并 flush)。
+    if !report.all_passed() {
+        std::process::exit(1);
     }
     Ok(())
 }

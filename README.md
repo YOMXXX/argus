@@ -90,7 +90,7 @@ argus run "explain this repo" --provider anthropic --model claude-3-5-haiku-late
 
 Argus writes every run to a JSONL file — one JSON object per line, one line per step. The format is open: fields include `step`, `ts_ms` (Unix milliseconds), and `kind` — a tagged object whose `type` is one of `thought` / `model_request` / `model_response` / `tool_call` / `tool_result` / `diff` / `verification_gate` / `note`, with variant-specific fields inlined alongside it. Read it with any text editor, pipe it through `jq`, or replay it with `argus trace show`.
 
-Capability boundary: more model providers (beyond Anthropic), sandboxed tool execution, the Eval engine, TUI, and MCP/skills import are still coming (see Roadmap).
+Capability boundary: more model providers (beyond Anthropic), sandboxed tool execution, TUI, and MCP/skills import are still coming (see Roadmap).
 
 ### Time travel (fork & diff)
 
@@ -136,6 +136,32 @@ argus run "make the failing test pass" --provider anthropic --model claude-sonne
 
 Each gate result is recorded to the trace (`verification_gate`). This is how Argus refuses to claim "done" when it isn't.
 
+### Eval (prove it on your repo)
+
+Quantify how reliably the agent completes tasks *on your own codebase*. Define a suite of cases — each a task plus the `verify` commands that decide pass/fail — and Argus runs them all and reports the pass-rate:
+
+```json
+{
+  "name": "smoke",
+  "cases": [
+    { "id": "hello-endpoint", "task": "add a /hello endpoint returning 200",
+      "dir": "fixtures/api", "verify": ["cargo build", "cargo test hello"] }
+  ]
+}
+```
+
+```bash
+argus eval suite.json --provider anthropic --model claude-sonnet-4-5
+```
+
+```
+eval: smoke (1 case(s))
+[PASS] hello-endpoint  → .argus/eval/hello-endpoint.jsonl
+1/1 passed (100%)
+```
+
+Each case writes its own trace under `--out-dir` (default `.argus/eval`), so any failure can be replayed or forked with `argus trace show`/`fork`. Argus exits non-zero if any case fails — drop it straight into CI. (MVP runs each case in place without auto-reset; keep fixtures clean between runs — results are a single-run snapshot.)
+
 ## Commands
 
 | Command | What it does |
@@ -144,10 +170,11 @@ Each gate result is recorded to the trace (`verification_gate`). This is how Arg
 | `argus trace show [PATH]` | Replay a recorded trace as a readable timeline |
 | `argus trace fork <trace> [--provider P] [--model M] [--out PATH]` | Re-run a trace's task with a different provider/model |
 | `argus trace diff <a> <b>` | Compare two traces step by step |
+| `argus eval <suite.json> [--provider P] [--model M] [--out-dir DIR]` | Batch-run an eval suite; report pass-rate, write per-case traces, exit non-zero on any failure |
 | `argus --version` | Print version |
 | `argus --help` | Full help |
 
-> **Coming online next:** more model providers (OpenAI / Google / local / OpenRouter) · sandboxed tool execution · the Eval engine · TUI · MCP & skills import.
+> **Coming online next:** more model providers (OpenAI / Google / local / OpenRouter) · sandboxed tool execution · TUI · MCP & skills import.
 
 ## Roadmap
 
