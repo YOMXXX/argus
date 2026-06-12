@@ -14,7 +14,7 @@ pub mod verifier;
 pub use agent::Agent;
 pub use anthropic::AnthropicProvider;
 pub use approver::{Approver, AutoApprover};
-pub use eval::{CaseResult, EvalCase, EvalSuite, SuiteReport};
+pub use eval::{run_suite, CaseResult, EvalCase, EvalSuite, SuiteReport};
 pub use provider::{MockProvider, Provider};
 pub use tool::{ReadFile, RunShell, Tool, WriteFile};
 pub use verifier::{CommandVerifier, VerifyResult, Verifier};
