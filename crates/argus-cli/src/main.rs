@@ -218,6 +218,9 @@ fn summarize(kind: &EventKind) -> String {
         EventKind::VerificationGate { passed, detail } => {
             format!("GATE     passed={passed}: {detail}")
         }
+        EventKind::RouteDecision { from_model, to_model, reason } => {
+            format!("ROUTE    {from_model} → {to_model}: {reason}")
+        }
         EventKind::Note { text } => format!("NOTE     {text}"),
     }
 }

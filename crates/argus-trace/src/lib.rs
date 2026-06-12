@@ -40,6 +40,8 @@ pub enum EventKind {
     ToolResult { name: String, ok: bool, output: String },
     Diff { path: String, patch: String },
     VerificationGate { passed: bool, detail: String },
+    /// 省钱路由:从便宜模型升级到强模型(验证失败触发)。
+    RouteDecision { from_model: String, to_model: String, reason: String },
     Note { text: String },
 }
 
@@ -189,6 +191,23 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&event).unwrap();
+        let back: TraceEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, back);
+    }
+
+    #[test]
+    fn route_decision_roundtrip() {
+        let event = TraceEvent {
+            step: 12,
+            ts_ms: 4321,
+            kind: EventKind::RouteDecision {
+                from_model: "haiku".into(),
+                to_model: "sonnet".into(),
+                reason: "verification failed".into(),
+            },
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"route_decision\""));
         let back: TraceEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, back);
     }
