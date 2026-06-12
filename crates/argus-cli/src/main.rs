@@ -3,7 +3,7 @@ use argus_core::{
     task_from_trace, Agent, AnthropicProvider, AutoApprover, MockProvider, ReadFile, RunShell,
     WriteFile,
 };
-use argus_core::{run_suite, Approver, CommandVerifier, EvalSuite, Verifier};
+use argus_core::{run_suite, run_with_escalation, Approver, CommandVerifier, EvalSuite, Verifier};
 use argus_trace::{read_trace, EventKind, TraceWriter};
 use clap::{Parser, Subcommand};
 use std::io::{BufRead, Write};
@@ -61,6 +61,26 @@ enum Commands {
         /// Directory for per-case traces.
         #[arg(long = "out-dir", default_value = ".argus/eval")]
         out_dir: PathBuf,
+    },
+    /// Cost-smart routing: cheap model first, escalate to strong on verify failure.
+    Route {
+        /// The task for the agent.
+        task: String,
+        /// Cheap model to try first.
+        #[arg(long)]
+        cheap: String,
+        /// Strong model to escalate to on verification failure.
+        #[arg(long)]
+        strong: String,
+        /// Verification command(s) that decide pass/escalate (repeatable, required).
+        #[arg(long = "verify")]
+        verify: Vec<String>,
+        /// Provider to use ('mock' needs no key; 'anthropic' reads ANTHROPIC_API_KEY).
+        #[arg(long, default_value = "mock")]
+        provider: String,
+        /// Where to write the trace (JSONL).
+        #[arg(long, default_value = ".argus/route.jsonl")]
+        trace: PathBuf,
     },
 }
 
@@ -122,6 +142,9 @@ async fn main() -> Result<()> {
         },
         Commands::Eval { suite, provider, model, out_dir } => {
             eval_run(&suite, &provider, &model, &out_dir).await
+        }
+        Commands::Route { task, cheap, strong, verify, provider, trace } => {
+            route_run(&task, &cheap, &strong, &verify, &provider, &trace).await
         }
     }
 }
@@ -293,5 +316,53 @@ async fn eval_run(suite_path: &Path, provider: &str, model: &str, out_dir: &Path
     if !report.all_passed() {
         std::process::exit(1);
     }
+    Ok(())
+}
+
+async fn route_run(
+    task: &str,
+    cheap: &str,
+    strong: &str,
+    verify: &[String],
+    provider: &str,
+    trace_path: &Path,
+) -> Result<()> {
+    if verify.is_empty() {
+        anyhow::bail!("--verify is required for route (it decides whether to escalate)");
+    }
+    let work_dir = Path::new(".");
+
+    let report = match provider {
+        "mock" => {
+            let p = MockProvider::new();
+            run_with_escalation(&p, cheap, strong, work_dir, trace_path, verify, task).await?
+        }
+        "anthropic" => {
+            let key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
+                anyhow::anyhow!("ANTHROPIC_API_KEY not set (required for --provider anthropic)")
+            })?;
+            let p = AnthropicProvider::new(key);
+            run_with_escalation(&p, cheap, strong, work_dir, trace_path, verify, task).await?
+        }
+        other => anyhow::bail!("unknown provider '{other}' (expected: mock | anthropic)"),
+    };
+
+    println!("{}", report.final_text);
+    let status = if report.passed { "passed" } else { "failed" };
+    if report.escalated {
+        println!(
+            "route: escalated {} → {} ({status})",
+            report.cheap_model, report.strong_model
+        );
+    } else {
+        println!("route: stayed on {} ({status})", report.cheap_model);
+    }
+    let actual = report.actual_cost();
+    let saved = report.always_strong_cost - actual;
+    println!(
+        "cost: ${:.4} actual (cheap ${:.4} + strong ${:.4}); vs always-strong ${:.4} → saved ${:.4}",
+        actual, report.cheap_cost, report.strong_cost, report.always_strong_cost, saved
+    );
+    eprintln!("(trace written to {})", trace_path.display());
     Ok(())
 }

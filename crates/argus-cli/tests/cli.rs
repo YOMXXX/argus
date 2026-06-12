@@ -223,3 +223,51 @@ fn eval_exits_nonzero_on_failure() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn route_escalates_and_reports_cost() {
+    let dir = std::env::temp_dir().join(format!("argus-route-it-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let trace = dir.join("t.jsonl");
+
+    // verify "false" → cheap 失败 → 升级 strong
+    let out = Command::new(bin())
+        .args(["route", "do x"])
+        .args(["--cheap", "claude-3-5-haiku-latest"])
+        .args(["--strong", "claude-sonnet-4-5"])
+        .args(["--verify", "false"])
+        .arg("--trace")
+        .arg(&trace)
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "route failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("escalated"), "stdout: {stdout}");
+
+    // trace 含 ROUTE 行
+    let show = Command::new(bin()).args(["trace", "show"]).arg(&trace).output().unwrap();
+    let s = String::from_utf8_lossy(&show.stdout);
+    assert!(s.contains("ROUTE"), "show: {s}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn route_requires_verify() {
+    let dir = std::env::temp_dir().join(format!("argus-route-noverify-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = Command::new(bin())
+        .args(["route", "do x"])
+        .args(["--cheap", "claude-3-5-haiku-latest"])
+        .args(["--strong", "claude-sonnet-4-5"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "route without --verify should fail");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("verify"), "stderr should mention verify: {stderr}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -162,6 +162,23 @@ eval: smoke (1 case(s))
 
 Each case writes its own trace under `--out-dir` (default `.argus/eval`), so any failure can be replayed or forked with `argus trace show`/`fork`. Argus exits non-zero if any case fails — drop it straight into CI. (MVP runs each case in place without auto-reset; keep fixtures clean between runs — results are a single-run snapshot.)
 
+### Cost-smart routing (cheap first, escalate on failure)
+
+Run the cheap model first; only if it can't make the verification pass does Argus escalate to a stronger (pricier) model — and it tells you what you saved:
+
+```bash
+argus route "fix the failing test" --provider anthropic \
+  --cheap claude-3-5-haiku-latest --strong claude-sonnet-4-5 \
+  --verify "cargo test"
+```
+
+```
+route: escalated claude-3-5-haiku-latest → claude-sonnet-4-5 (passed)
+cost: $0.0123 actual (cheap $0.0021 + strong $0.0102); vs always-strong $0.0150 → saved $0.0027
+```
+
+The escalation is recorded in the trace as a `route_decision` event (`argus trace show` renders it as a `ROUTE` line). `--verify` is required — it's the objective signal that decides whether the cheap model succeeded. Cost is estimated from real token usage per model.
+
 ## Commands
 
 | Command | What it does |
@@ -171,6 +188,7 @@ Each case writes its own trace under `--out-dir` (default `.argus/eval`), so any
 | `argus trace fork <trace> [--provider P] [--model M] [--out PATH]` | Re-run a trace's task with a different provider/model |
 | `argus trace diff <a> <b>` | Compare two traces step by step |
 | `argus eval <suite.json> [--provider P] [--model M] [--out-dir DIR]` | Batch-run an eval suite; report pass-rate, write per-case traces, exit non-zero on any failure |
+| `argus route <task> --cheap M1 --strong M2 --verify CMD [--provider P]` | Run cheap model first, escalate to strong on verification failure; report estimated cost saved |
 | `argus --version` | Print version |
 | `argus --help` | Full help |
 
@@ -180,7 +198,7 @@ Each case writes its own trace under `--out-dir` (default `.argus/eval`), so any
 
 - **Phase 0** — Core: agent loop · sandbox · provider abstraction · MCP · skills/AGENTS.md compat · TUI · **Trace black box**
 - **Phase 1** — Reliability spearhead: **verification gate · Eval engine · time-travel debugging**
-- **Phase 1.5** — **Cost-smart routing** · drift guard · circuit breaker
+- **Phase 1.5** — ✅ Cost-smart routing · drift guard · circuit breaker (planned)
 - **v1.0** — All four killer features, shipped.
 - **Phase 2** — 24/7 multi-channel runs · lightweight governance · hosted SaaS
 
