@@ -271,3 +271,33 @@ fn route_requires_verify() {
     assert!(stderr.contains("verify"), "stderr should mention verify: {stderr}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn run_openai_without_key_errors() {
+    let trace = std::env::temp_dir().join(format!("argus-oai-nokey-{}.jsonl", std::process::id()));
+    let out = Command::new(bin())
+        .args(["run", "x", "--provider", "openai", "--trace"])
+        .arg(&trace)
+        .env_remove("OPENAI_API_KEY")
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "should fail without key");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("OPENAI_API_KEY not set"), "stderr was: {stderr}");
+    let _ = std::fs::remove_file(&trace);
+}
+
+#[test]
+fn run_rejects_unknown_provider_lists_openai() {
+    let trace = std::env::temp_dir().join(format!("argus-unk2-{}.jsonl", std::process::id()));
+    let out = Command::new(bin())
+        .args(["run", "x", "--provider", "nope", "--trace"])
+        .arg(&trace)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("unknown provider"), "stderr: {stderr}");
+    assert!(stderr.contains("openai"), "error should list openai as an option: {stderr}");
+    let _ = std::fs::remove_file(&trace);
+}

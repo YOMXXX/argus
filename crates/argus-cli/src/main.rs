@@ -1,7 +1,7 @@
 use anyhow::Result;
 use argus_core::{
-    task_from_trace, Agent, AnthropicProvider, AutoApprover, MockProvider, ReadFile, RunShell,
-    WriteFile,
+    task_from_trace, Agent, AnthropicProvider, AutoApprover, MockProvider, OpenAiProvider,
+    Provider, ReadFile, RunShell, WriteFile,
 };
 use argus_core::{run_suite, run_with_escalation, Approver, CommandVerifier, EvalSuite, Verifier};
 use argus_trace::{read_trace, EventKind, TraceWriter};
@@ -42,6 +42,9 @@ enum Commands {
         /// Verification command(s) that must pass before the agent is "done" (repeatable).
         #[arg(long = "verify")]
         verify: Vec<String>,
+        /// Override the provider base URL (OpenAI-compatible endpoints: OpenRouter, local Ollama, …).
+        #[arg(long = "base-url")]
+        base_url: Option<String>,
     },
     /// Inspect a recorded trace.
     Trace {
@@ -61,6 +64,9 @@ enum Commands {
         /// Directory for per-case traces.
         #[arg(long = "out-dir", default_value = ".argus/eval")]
         out_dir: PathBuf,
+        /// Override the provider base URL (OpenAI-compatible endpoints: OpenRouter, local Ollama, …).
+        #[arg(long = "base-url")]
+        base_url: Option<String>,
     },
     /// Cost-smart routing: cheap model first, escalate to strong on verify failure.
     Route {
@@ -81,6 +87,9 @@ enum Commands {
         /// Where to write the trace (JSONL).
         #[arg(long, default_value = ".argus/route.jsonl")]
         trace: PathBuf,
+        /// Override the provider base URL (OpenAI-compatible endpoints: OpenRouter, local Ollama, …).
+        #[arg(long = "base-url")]
+        base_url: Option<String>,
     },
 }
 
@@ -127,11 +136,37 @@ impl Approver for StdinApprover {
     }
 }
 
+/// 按名字构造 provider;`base_url` 可覆盖端点(OpenAI 兼容端点如 OpenRouter / 本地 Ollama)。
+fn make_provider(provider: &str, base_url: Option<&str>) -> Result<Box<dyn Provider>> {
+    match provider {
+        "mock" => Ok(Box::new(MockProvider::new())),
+        "anthropic" => {
+            let key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
+                anyhow::anyhow!("ANTHROPIC_API_KEY not set (required for --provider anthropic)")
+            })?;
+            Ok(match base_url {
+                Some(u) => Box::new(AnthropicProvider::with_base_url(key, u)),
+                None => Box::new(AnthropicProvider::new(key)),
+            })
+        }
+        "openai" => {
+            let key = std::env::var("OPENAI_API_KEY").map_err(|_| {
+                anyhow::anyhow!("OPENAI_API_KEY not set (required for --provider openai)")
+            })?;
+            Ok(match base_url {
+                Some(u) => Box::new(OpenAiProvider::with_base_url(key, u)),
+                None => Box::new(OpenAiProvider::new(key)),
+            })
+        }
+        other => anyhow::bail!("unknown provider '{other}' (expected: mock | anthropic | openai)"),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().command {
-        Commands::Run { task, model, trace, provider, yes, verify } => {
-            run(&provider, &task, &model, &trace, yes, &verify).await
+        Commands::Run { task, model, trace, provider, yes, verify, base_url } => {
+            run(&provider, &task, &model, &trace, yes, &verify, base_url.as_deref()).await
         }
         Commands::Trace { command } => match command {
             TraceCommands::Show { path } => trace_show(&path),
@@ -140,66 +175,47 @@ async fn main() -> Result<()> {
             }
             TraceCommands::Diff { a, b } => trace_diff(&a, &b),
         },
-        Commands::Eval { suite, provider, model, out_dir } => {
-            eval_run(&suite, &provider, &model, &out_dir).await
+        Commands::Eval { suite, provider, model, out_dir, base_url } => {
+            eval_run(&suite, &provider, &model, &out_dir, base_url.as_deref()).await
         }
-        Commands::Route { task, cheap, strong, verify, provider, trace } => {
-            route_run(&task, &cheap, &strong, &verify, &provider, &trace).await
+        Commands::Route { task, cheap, strong, verify, provider, trace, base_url } => {
+            route_run(&task, &cheap, &strong, &verify, &provider, &trace, base_url.as_deref()).await
         }
     }
 }
 
-async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path, yes: bool, verify: &[String]) -> Result<String> {
+async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path, yes: bool, verify: &[String], base_url: Option<&str>) -> Result<String> {
     if let Some(parent) = trace_path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
         }
     }
     let mut trace = TraceWriter::create(trace_path)?;
+    let p = make_provider(provider, base_url)?;
+    if provider != "mock" && model == "mock" {
+        eprintln!("warning: --model is 'mock'; pass a real model (e.g. --model claude-sonnet-4-5 or gpt-4o-mini)");
+    }
     let make_approver = || -> Box<dyn Approver> {
         if yes { Box::new(AutoApprover) } else { Box::new(StdinApprover) }
     };
     let make_verifier = || -> Option<Box<dyn Verifier>> {
         if verify.is_empty() { None } else { Some(Box::new(CommandVerifier::new(".", verify.to_vec()))) }
     };
-    let output = match provider {
-        "mock" => {
-            let p = MockProvider::new();
-            let mut agent = Agent::new(&p, model, &mut trace)
-                .with_tools(vec![
-                    Box::new(ReadFile::new(".")),
-                    Box::new(WriteFile::new(".")),
-                    Box::new(RunShell::new(".")),
-                ])
-                .with_approver(make_approver());
-            if let Some(v) = make_verifier() { agent = agent.with_verifier(v); }
-            agent.run(task).await?
-        }
-        "anthropic" => {
-            if model == "mock" {
-                eprintln!("warning: --model is 'mock'; for Anthropic pass e.g. --model claude-sonnet-4-5");
-            }
-            let key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
-                anyhow::anyhow!("ANTHROPIC_API_KEY not set (required for --provider anthropic)")
-            })?;
-            let p = AnthropicProvider::new(key);
-            let mut agent = Agent::new(&p, model, &mut trace)
-                .with_tools(vec![
-                    Box::new(ReadFile::new(".")),
-                    Box::new(WriteFile::new(".")),
-                    Box::new(RunShell::new(".")),
-                ])
-                .with_approver(make_approver());
-            if let Some(v) = make_verifier() { agent = agent.with_verifier(v); }
-            agent.run(task).await?
-        }
-        other => anyhow::bail!("unknown provider '{other}' (expected: mock | anthropic)"),
-    };
-    Ok(output)
+    let mut agent = Agent::new(&*p, model, &mut trace)
+        .with_tools(vec![
+            Box::new(ReadFile::new(".")),
+            Box::new(WriteFile::new(".")),
+            Box::new(RunShell::new(".")),
+        ])
+        .with_approver(make_approver());
+    if let Some(v) = make_verifier() {
+        agent = agent.with_verifier(v);
+    }
+    agent.run(task).await
 }
 
-async fn run(provider: &str, task: &str, model: &str, trace_path: &Path, yes: bool, verify: &[String]) -> Result<()> {
-    let output = run_agent(provider, model, task, trace_path, yes, verify).await?;
+async fn run(provider: &str, task: &str, model: &str, trace_path: &Path, yes: bool, verify: &[String], base_url: Option<&str>) -> Result<()> {
+    let output = run_agent(provider, model, task, trace_path, yes, verify, base_url).await?;
     println!("{output}");
     eprintln!("(trace written to {})", trace_path.display());
     Ok(())
@@ -217,7 +233,7 @@ async fn trace_fork(src: &Path, provider: &str, model: &str, out: Option<&Path>)
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| src.with_extension("fork.jsonl"));
     eprintln!("forking task from {}: {task:?}", src.display());
-    let output = run_agent(provider, model, &task, &out_path, true, &[]).await?;
+    let output = run_agent(provider, model, &task, &out_path, true, &[], None).await?;
     println!("{output}");
     eprintln!("(forked trace written to {})", out_path.display());
     Ok(())
@@ -275,7 +291,7 @@ fn trace_diff(a_path: &Path, b_path: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn eval_run(suite_path: &Path, provider: &str, model: &str, out_dir: &Path) -> Result<()> {
+async fn eval_run(suite_path: &Path, provider: &str, model: &str, out_dir: &Path, base_url: Option<&str>) -> Result<()> {
     let text = std::fs::read_to_string(suite_path)
         .map_err(|e| anyhow::anyhow!("failed to read suite {}: {e}", suite_path.display()))?;
     let suite: EvalSuite = serde_json::from_str(&text)
@@ -286,23 +302,8 @@ async fn eval_run(suite_path: &Path, provider: &str, model: &str, out_dir: &Path
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
 
-    let report = match provider {
-        "mock" => {
-            let p = MockProvider::new();
-            run_suite(&suite, base_dir, &p, model, out_dir).await?
-        }
-        "anthropic" => {
-            if model == "mock" {
-                eprintln!("warning: --model is 'mock'; for Anthropic pass e.g. --model claude-sonnet-4-5");
-            }
-            let key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
-                anyhow::anyhow!("ANTHROPIC_API_KEY not set (required for --provider anthropic)")
-            })?;
-            let p = AnthropicProvider::new(key);
-            run_suite(&suite, base_dir, &p, model, out_dir).await?
-        }
-        other => anyhow::bail!("unknown provider '{other}' (expected: mock | anthropic)"),
-    };
+    let p = make_provider(provider, base_url)?;
+    let report = run_suite(&suite, base_dir, &*p, model, out_dir).await?;
 
     println!("eval: {} ({} case(s))", report.suite_name, report.total());
     for r in &report.results {
@@ -326,26 +327,15 @@ async fn route_run(
     verify: &[String],
     provider: &str,
     trace_path: &Path,
+    base_url: Option<&str>,
 ) -> Result<()> {
     if verify.is_empty() {
         anyhow::bail!("--verify is required for route (it decides whether to escalate)");
     }
     let work_dir = Path::new(".");
 
-    let report = match provider {
-        "mock" => {
-            let p = MockProvider::new();
-            run_with_escalation(&p, cheap, strong, work_dir, trace_path, verify, task).await?
-        }
-        "anthropic" => {
-            let key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
-                anyhow::anyhow!("ANTHROPIC_API_KEY not set (required for --provider anthropic)")
-            })?;
-            let p = AnthropicProvider::new(key);
-            run_with_escalation(&p, cheap, strong, work_dir, trace_path, verify, task).await?
-        }
-        other => anyhow::bail!("unknown provider '{other}' (expected: mock | anthropic)"),
-    };
+    let p = make_provider(provider, base_url)?;
+    let report = run_with_escalation(&*p, cheap, strong, work_dir, trace_path, verify, task).await?;
 
     println!("{}", report.final_text);
     let status = if report.passed { "passed" } else { "failed" };

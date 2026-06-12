@@ -77,20 +77,34 @@ $ argus trace show .argus/trace.jsonl
 
 Each step carries a monotonic `step` number — the anchor that time-travel debugging will fork from (Phase 1).
 
-### Use a real model (Anthropic)
+### Use a real model (Anthropic / OpenAI / compatible)
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 argus run "explain this repo" --provider anthropic --model claude-3-5-haiku-latest
 ```
 
-`--provider` defaults to `mock` (zero config). With `--provider anthropic`, Argus calls the Anthropic Messages API (non-streaming) and records **real token usage** into the trace. More providers (OpenAI / Google / local / OpenRouter) are coming — the `Provider` trait is already model-agnostic.
+`--provider` defaults to `mock` (zero config). With `--provider anthropic`, Argus calls the Anthropic Messages API (non-streaming) and records **real token usage** into the trace.
+
+Argus also speaks the **OpenAI Chat Completions** API — which means OpenAI, OpenRouter, and local servers (Ollama, vLLM, LM Studio) all work through one provider:
+
+```bash
+# OpenAI
+export OPENAI_API_KEY=sk-...
+argus run "explain this repo" --provider openai --model gpt-4o-mini
+
+# Any OpenAI-compatible endpoint (OpenRouter / local Ollama) via --base-url
+argus run "explain this repo" --provider openai --model llama3.1 \
+  --base-url http://localhost:11434/v1
+```
+
+`--base-url` works on `run`, `eval`, and `route`. This is what "model-agnostic" means in practice: same agent, same trace, your choice of model.
 
 ### The black box (trace)
 
 Argus writes every run to a JSONL file — one JSON object per line, one line per step. The format is open: fields include `step`, `ts_ms` (Unix milliseconds), and `kind` — a tagged object whose `type` is one of `thought` / `model_request` / `model_response` / `tool_call` / `tool_result` / `diff` / `verification_gate` / `note`, with variant-specific fields inlined alongside it. Read it with any text editor, pipe it through `jq`, or replay it with `argus trace show`.
 
-Capability boundary: more model providers (beyond Anthropic), sandboxed tool execution, TUI, and MCP/skills import are still coming (see Roadmap).
+Capability boundary: sandboxed tool execution, TUI, and MCP/skills import are still coming (see Roadmap).
 
 ### Time travel (fork & diff)
 
@@ -192,7 +206,7 @@ The escalation is recorded in the trace as a `route_decision` event (`argus trac
 | `argus --version` | Print version |
 | `argus --help` | Full help |
 
-> **Coming online next:** more model providers (OpenAI / Google / local / OpenRouter) · sandboxed tool execution · TUI · MCP & skills import.
+> **Coming online next:** sandboxed tool execution · TUI · MCP & skills import.
 
 ## Roadmap
 
