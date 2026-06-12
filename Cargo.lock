@@ -75,6 +75,7 @@ dependencies = [
  "argus-core",
  "argus-trace",
  "clap",
+ "serde_json",
  "tokio",
 ]
 
