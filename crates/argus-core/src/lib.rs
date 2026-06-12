@@ -7,6 +7,7 @@ pub(crate) mod anthropic;
 pub mod approver;
 pub mod cost;
 pub mod eval;
+pub(crate) mod openai;
 pub mod provider;
 pub mod router;
 pub mod tool;
@@ -15,6 +16,7 @@ pub mod verifier;
 
 pub use agent::Agent;
 pub use anthropic::AnthropicProvider;
+pub use openai::OpenAiProvider;
 pub use approver::{Approver, AutoApprover};
 pub use cost::estimate_cost;
 pub use router::{run_with_escalation, RouteReport};
