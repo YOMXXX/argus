@@ -7,6 +7,7 @@ pub(crate) mod anthropic;
 pub mod approver;
 pub mod cost;
 pub mod eval;
+pub mod mcp;
 pub(crate) mod openai;
 pub mod provider;
 pub mod router;
