@@ -220,7 +220,11 @@ impl Tool for ListFiles {
         if total > MAX_RESULTS {
             out.push_str(&format!("\n... ({} more)", total - MAX_RESULTS));
         }
-        Ok(if out.is_empty() { "(no files)".into() } else { out })
+        Ok(if out.is_empty() {
+            "(no files)".into()
+        } else {
+            out
+        })
     }
 }
 
@@ -355,12 +359,19 @@ mod tests {
     #[tokio::test]
     async fn search_text_finds_matches() {
         let root = tmp_root("search");
-        std::fs::write(root.join("code.rs"), "fn main() {\n    let token = 42;\n}\n").unwrap();
+        std::fs::write(
+            root.join("code.rs"),
+            "fn main() {\n    let token = 42;\n}\n",
+        )
+        .unwrap();
         let st = SearchText::new(&root);
         let hits = st.execute(&json!({"pattern": "token"})).await.unwrap();
         assert!(hits.contains("code.rs:2:"), "hits: {hits}");
         assert!(hits.contains("token"), "hits: {hits}");
-        let none = st.execute(&json!({"pattern": "zzzznotfound"})).await.unwrap();
+        let none = st
+            .execute(&json!({"pattern": "zzzznotfound"}))
+            .await
+            .unwrap();
         assert!(none.contains("no matches"), "none: {none}");
         assert!(!st.requires_approval());
         let _ = std::fs::remove_dir_all(&root);
