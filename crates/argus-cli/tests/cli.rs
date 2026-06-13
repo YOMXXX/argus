@@ -378,3 +378,20 @@ fn run_with_mcp_server_injects_and_calls_tool() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn mcp_serve_exposes_verify_tool() {
+    use argus_core::McpClient;
+    // Argus 当 MCP client,spawn Argus 当 MCP server
+    let mut client = McpClient::spawn(bin(), &["mcp-serve".to_string()]).await.unwrap();
+    let tools = client.list_tools().await.unwrap();
+    assert!(tools.iter().any(|t| t.name == "verify"), "should expose 'verify' tool, got: {:?}", tools.iter().map(|t| &t.name).collect::<Vec<_>>());
+
+    // verify ["true"] → 通过
+    let out = client.call_tool("verify", &serde_json::json!({"commands": ["true"]})).await.unwrap();
+    assert!(out.contains("passed: true"), "true should pass: {out}");
+
+    // verify ["false"] → 不通过(含失败详情)
+    let out = client.call_tool("verify", &serde_json::json!({"commands": ["false"]})).await.unwrap();
+    assert!(out.contains("passed: false"), "false should not pass: {out}");
+}

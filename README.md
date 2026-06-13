@@ -225,6 +225,20 @@ argus tui .argus/eval/case-1.jsonl   # or any trace
 
 Right pane = the timeline (↑/↓ or j/k to select, `q` to quit); left pane = the selected step's full detail. Built on [ratatui](https://ratatui.rs).
 
+### Plug Argus into Claude Code / Cursor (MCP server)
+
+Argus also runs *as* an MCP server — so any MCP host (Claude Code, Cursor, Codex) can call its reliability tools. Add it to your MCP config:
+
+```json
+{
+  "mcpServers": {
+    "argus": { "command": "argus", "args": ["mcp-serve"] }
+  }
+}
+```
+
+Now your agent has a `verify` tool: it can prove a task is actually done (build/test/lint all exit 0) instead of just claiming it. Argus is both an agent *and* the trust layer for the agents you already use.
+
 ## Commands
 
 | Command | What it does |
@@ -236,6 +250,7 @@ Right pane = the timeline (↑/↓ or j/k to select, `q` to quit); left pane = t
 | `argus eval <suite.json> [--provider P] [--model M] [--out-dir DIR]` | Batch-run an eval suite; report pass-rate, write per-case traces, exit non-zero on any failure |
 | `argus route <task> --cheap M1 --strong M2 --verify CMD [--provider P]` | Run cheap model first, escalate to strong on verification failure; report estimated cost saved |
 | `argus tui [trace]` | Browse a trace in an interactive two-pane TUI |
+| `argus mcp-serve` | Run Argus as an MCP server (exposes `verify` to Claude Code / Cursor / any MCP host) |
 | `argus --version` | Print version |
 | `argus --help` | Full help |
 

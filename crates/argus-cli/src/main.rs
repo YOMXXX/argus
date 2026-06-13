@@ -105,6 +105,9 @@ enum Commands {
     /// (internal) Minimal MCP server over stdio for end-to-end tests.
     #[command(name = "__mcp-mock", hide = true)]
     McpMock,
+    /// Run Argus as an MCP server: expose its reliability tools (e.g. `verify`) to any MCP client (Claude Code, Cursor, …).
+    #[command(name = "mcp-serve")]
+    McpServe,
     /// Open a trace in an interactive TUI (two-pane timeline browser).
     Tui {
         /// Path to the trace JSONL file.
@@ -236,6 +239,7 @@ async fn main() -> Result<()> {
             route_run(&task, &cheap, &strong, &verify, &provider, &trace, base_url.as_deref()).await
         }
         Commands::McpMock => mcp_mock().await,
+        Commands::McpServe => mcp_serve().await,
         Commands::Tui { path } => tui::run_tui(&path),
     }
 }
@@ -426,6 +430,94 @@ async fn route_run(
     );
     eprintln!("(trace written to {})", trace_path.display());
     Ok(())
+}
+
+/// Argus 作为 MCP server(stdio,newline JSON-RPC 2.0):把可靠性能力暴露成工具。
+async fn mcp_serve() -> Result<()> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let mut reader = BufReader::new(tokio::io::stdin());
+    let mut stdout = tokio::io::stdout();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).await?;
+        if n == 0 {
+            break;
+        }
+        let msg: serde_json::Value = match serde_json::from_str(line.trim()) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let method = msg.get("method").and_then(|v| v.as_str()).unwrap_or("");
+        let id = msg.get("id").cloned().unwrap_or(serde_json::Value::Null);
+        let response = match method {
+            "initialize" => Some(serde_json::json!({
+                "jsonrpc": "2.0", "id": id,
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "argus", "version": env!("CARGO_PKG_VERSION")}
+                }
+            })),
+            "tools/list" => Some(serde_json::json!({
+                "jsonrpc": "2.0", "id": id,
+                "result": {"tools": [{
+                    "name": "verify",
+                    "description": "Run verification commands (build/test/lint) in a directory; all must exit 0 to pass. Use this to prove a task is actually done before claiming success.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "commands": {"type": "array", "items": {"type": "string"}, "description": "Shell commands that must all exit 0."},
+                            "dir": {"type": "string", "description": "Working directory (default: current)."}
+                        },
+                        "required": ["commands"]
+                    }
+                }]}
+            })),
+            "tools/call" => {
+                let params = msg.get("params").cloned().unwrap_or(serde_json::Value::Null);
+                let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let args = params.get("arguments").cloned().unwrap_or(serde_json::Value::Null);
+                let call = mcp_serve_tool(name, &args).await;
+                Some(match call {
+                    Ok(text) => serde_json::json!({
+                        "jsonrpc": "2.0", "id": id,
+                        "result": {"content": [{"type": "text", "text": text}]}
+                    }),
+                    Err(e) => serde_json::json!({
+                        "jsonrpc": "2.0", "id": id,
+                        "result": {"content": [{"type": "text", "text": format!("error: {e}")}], "isError": true}
+                    }),
+                })
+            }
+            _ => None, // 通知(如 notifications/initialized)无需响应
+        };
+        if let Some(resp) = response {
+            stdout.write_all(format!("{resp}\n").as_bytes()).await?;
+            stdout.flush().await?;
+        }
+    }
+    Ok(())
+}
+
+/// 执行 mcp-serve 暴露的工具。
+async fn mcp_serve_tool(name: &str, args: &serde_json::Value) -> Result<String> {
+    match name {
+        "verify" => {
+            let commands: Vec<String> = args
+                .get("commands")
+                .and_then(|v| v.as_array())
+                .map(|a| a.iter().filter_map(|c| c.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            if commands.is_empty() {
+                anyhow::bail!("verify: 'commands' is required and must be non-empty");
+            }
+            let dir = args.get("dir").and_then(|v| v.as_str()).unwrap_or(".");
+            let result = CommandVerifier::new(dir, commands).verify().await;
+            Ok(format!("passed: {}\n{}", result.passed, result.detail))
+        }
+        other => anyhow::bail!("unknown tool '{other}'"),
+    }
 }
 
 /// 一个最小 MCP server(stdio,newline JSON-RPC):提供单个 `echo` 工具。仅用于端到端测试。
