@@ -1,3 +1,5 @@
+mod tui;
+
 use anyhow::Result;
 use argus_core::{
     task_from_trace, Agent, AnthropicProvider, AutoApprover, MockProvider, OpenAiProvider,
@@ -103,6 +105,12 @@ enum Commands {
     /// (internal) Minimal MCP server over stdio for end-to-end tests.
     #[command(name = "__mcp-mock", hide = true)]
     McpMock,
+    /// Open a trace in an interactive TUI (two-pane timeline browser).
+    Tui {
+        /// Path to the trace JSONL file.
+        #[arg(default_value = ".argus/trace.jsonl")]
+        path: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -228,6 +236,7 @@ async fn main() -> Result<()> {
             route_run(&task, &cheap, &strong, &verify, &provider, &trace, base_url.as_deref()).await
         }
         Commands::McpMock => mcp_mock().await,
+        Commands::Tui { path } => tui::run_tui(&path),
     }
 }
 

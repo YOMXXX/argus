@@ -273,6 +273,15 @@ fn route_requires_verify() {
 }
 
 #[test]
+fn tui_errors_on_missing_trace() {
+    let out = Command::new(bin())
+        .args(["tui", "/nonexistent/argus-trace.jsonl"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "tui should fail on missing trace");
+}
+
+#[test]
 fn run_openai_without_key_errors() {
     let trace = std::env::temp_dir().join(format!("argus-oai-nokey-{}.jsonl", std::process::id()));
     let out = Command::new(bin())
