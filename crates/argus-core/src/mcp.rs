@@ -3,9 +3,15 @@
 //! stdio transport:每条 JSON-RPC 2.0 消息一行(`\n` 分隔)。
 
 use anyhow::Result;
+use crate::tool::Tool;
+use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::process::Stdio;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio::process::Child;
+use tokio::sync::Mutex;
 
 /// 一个 MCP server 暴露的工具定义。
 #[derive(Debug, Clone)]
@@ -111,12 +117,83 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> McpClient<R, W> {
     }
 }
 
+impl McpClient<ChildStdout, ChildStdin> {
+    /// spawn 一个 MCP server 子进程(stdio transport)并完成握手。
+    pub async fn spawn(command: &str, args: &[String]) -> Result<Self> {
+        let mut child = Command::new(command)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|e| anyhow::anyhow!("failed to spawn MCP server '{command}': {e}"))?;
+        let stdin = child.stdin.take().expect("piped stdin");
+        let stdout = child.stdout.take().expect("piped stdout");
+        let mut client = McpClient {
+            reader: BufReader::new(stdout),
+            writer: stdin,
+            next_id: 1,
+            child: Some(child),
+        };
+        client.initialize().await?;
+        Ok(client)
+    }
+}
+
 impl<R, W> Drop for McpClient<R, W> {
     fn drop(&mut self) {
         if let Some(child) = self.child.as_mut() {
             let _ = child.start_kill();
         }
     }
+}
+
+/// 把一个 MCP server 的工具包装成 Argus `Tool`,execute 转发到 tools/call。
+pub struct McpTool<R, W> {
+    client: Arc<Mutex<McpClient<R, W>>>,
+    name: String,
+    description: String,
+    input_schema: Value,
+}
+
+#[async_trait]
+impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Tool for McpTool<R, W> {
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn description(&self) -> &str {
+        &self.description
+    }
+    fn input_schema(&self) -> Value {
+        self.input_schema.clone()
+    }
+    async fn execute(&self, input: &Value) -> anyhow::Result<String> {
+        self.client.lock().await.call_tool(&self.name, input).await
+    }
+    /// 外部 MCP 工具默认需审批(可能有副作用)。
+    fn requires_approval(&self) -> bool {
+        true
+    }
+}
+
+/// spawn 一个 MCP server 并把它的全部工具包装为 `Box<dyn Tool>`。
+/// 返回的工具共享同一连接(Arc<Mutex>);连接随最后一个工具 drop 而关闭(子进程被杀)。
+pub async fn mcp_connect(command: &str, args: &[String]) -> Result<Vec<Box<dyn Tool>>> {
+    let mut client = McpClient::spawn(command, args).await?;
+    let defs = client.list_tools().await?;
+    let shared = Arc::new(Mutex::new(client));
+    let tools: Vec<Box<dyn Tool>> = defs
+        .into_iter()
+        .map(|d| {
+            Box::new(McpTool {
+                client: shared.clone(),
+                name: d.name,
+                description: d.description,
+                input_schema: d.input_schema,
+            }) as Box<dyn Tool>
+        })
+        .collect();
+    Ok(tools)
 }
 
 #[cfg(test)]

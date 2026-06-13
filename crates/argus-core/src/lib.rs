@@ -22,6 +22,7 @@ pub use approver::{Approver, AutoApprover};
 pub use cost::estimate_cost;
 pub use router::{run_with_escalation, RouteReport};
 pub use eval::{run_suite, CaseResult, EvalCase, EvalSuite, SuiteReport};
+pub use mcp::{mcp_connect, McpClient, McpTool, McpToolDef};
 pub use provider::{MockProvider, Provider};
 pub use tool::{ReadFile, RunShell, Tool, WriteFile};
 pub use verifier::{CommandVerifier, VerifyResult, Verifier};
