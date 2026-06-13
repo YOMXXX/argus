@@ -104,7 +104,7 @@ argus run "explain this repo" --provider openai --model llama3.1 \
 
 Argus writes every run to a JSONL file — one JSON object per line, one line per step. The format is open: fields include `step`, `ts_ms` (Unix milliseconds), and `kind` — a tagged object whose `type` is one of `thought` / `model_request` / `model_response` / `tool_call` / `tool_result` / `diff` / `verification_gate` / `note`, with variant-specific fields inlined alongside it. Read it with any text editor, pipe it through `jq`, or replay it with `argus trace show`.
 
-Capability boundary: sandboxed tool execution and a TUI are still coming (see Roadmap).
+Capability boundary: a hardened sandbox for tool execution is still on the roadmap.
 
 ### Time travel (fork & diff)
 
@@ -213,6 +213,18 @@ argus run "search the docs and summarize" --provider anthropic --model claude-so
 
 MCP tools run behind the same approval gate as shell commands. That's zero-migration: your existing rules and MCP servers, no rewrite.
 
+### TUI (browse traces like lazygit)
+
+Every run is recorded; `argus tui` opens that black box in an interactive two-pane browser — the Trace timeline as a first-class citizen:
+
+```bash
+argus run "refactor the parser"      # records .argus/trace.jsonl
+argus tui                            # browse it (defaults to .argus/trace.jsonl)
+argus tui .argus/eval/case-1.jsonl   # or any trace
+```
+
+Right pane = the timeline (↑/↓ or j/k to select, `q` to quit); left pane = the selected step's full detail. Built on [ratatui](https://ratatui.rs).
+
 ## Commands
 
 | Command | What it does |
@@ -223,10 +235,11 @@ MCP tools run behind the same approval gate as shell commands. That's zero-migra
 | `argus trace diff <a> <b>` | Compare two traces step by step |
 | `argus eval <suite.json> [--provider P] [--model M] [--out-dir DIR]` | Batch-run an eval suite; report pass-rate, write per-case traces, exit non-zero on any failure |
 | `argus route <task> --cheap M1 --strong M2 --verify CMD [--provider P]` | Run cheap model first, escalate to strong on verification failure; report estimated cost saved |
+| `argus tui [trace]` | Browse a trace in an interactive two-pane TUI |
 | `argus --version` | Print version |
 | `argus --help` | Full help |
 
-> **Coming online next:** sandboxed tool execution · TUI.
+> **Coming online next:** sandboxed tool execution.
 
 ## Roadmap
 

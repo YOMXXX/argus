@@ -32,7 +32,6 @@ impl App {
             self.selected -= 1;
         }
     }
-    #[allow(dead_code)] // P9-T2 双栏详情面板会用到
     pub fn selected_event(&self) -> Option<&TraceEvent> {
         self.events.get(self.selected)
     }
@@ -55,15 +54,73 @@ pub fn event_summary(e: &TraceEvent) -> String {
     format!("[{:>3}] {}", e.step, tag)
 }
 
-/// 渲染(walking skeleton:单栏时间线 List,高亮选中项)。
+/// 选中 step 的详细内容(左栏详情用)。
+pub fn event_detail(e: &TraceEvent) -> String {
+    match &e.kind {
+        EventKind::TaskStarted { task } => format!("TASK STARTED\n\n{task}"),
+        EventKind::Thought { text } => format!("THOUGHT\n\n{text}"),
+        EventKind::ModelRequest { model, prompt_tokens } => {
+            format!("MODEL REQUEST\n\nmodel: {model}\nprompt tokens: {prompt_tokens}")
+        }
+        EventKind::ModelResponse { model, prompt_tokens, completion_tokens, text } => {
+            format!("MODEL RESPONSE\n\nmodel: {model}\ntokens: {prompt_tokens}+{completion_tokens}\n\n{text}")
+        }
+        EventKind::ToolCall { name, args } => format!("TOOL CALL\n\n{name}\n\nargs: {args}"),
+        EventKind::ToolResult { name, ok, output } => {
+            format!("TOOL RESULT\n\n{name} (ok={ok})\n\n{output}")
+        }
+        EventKind::Diff { path, patch } => format!("DIFF {path}\n\n{patch}"),
+        EventKind::VerificationGate { passed, detail } => {
+            format!("VERIFICATION GATE\n\npassed: {passed}\n\n{detail}")
+        }
+        EventKind::RouteDecision { from_model, to_model, reason } => {
+            format!("ROUTE DECISION\n\n{from_model} → {to_model}\n\n{reason}")
+        }
+        EventKind::Note { text } => format!("NOTE\n\n{text}"),
+    }
+}
+
+/// 渲染(双栏:左详情 60% + 右时间线 40% + 底状态栏)。
 pub fn ui(f: &mut Frame, app: &App) {
+    use ratatui::layout::{Constraint, Direction, Layout};
+    use ratatui::text::Line;
+    use ratatui::widgets::{Paragraph, Wrap};
+
+    // 垂直:主体 + 底部状态栏
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(1)])
+        .split(f.area());
+
+    // 水平:左详情(60%) + 右时间线(40%)
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(outer[0]);
+
+    // 左:选中 step 详情
+    let detail = app.selected_event().map(event_detail).unwrap_or_else(|| "(no event)".into());
+    let detail_widget = Paragraph::new(detail)
+        .block(Block::default().borders(Borders::ALL).title("Detail"))
+        .wrap(Wrap { trim: false });
+    f.render_widget(detail_widget, panes[0]);
+
+    // 右:时间线 List(高亮选中)
     let items: Vec<ListItem> = app.events.iter().map(|e| ListItem::new(event_summary(e))).collect();
     let mut state = ListState::default();
     state.select(Some(app.selected));
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title("Argus Trace — ↑/↓ select, q quit"))
+        .block(Block::default().borders(Borders::ALL).title("Timeline"))
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
-    f.render_stateful_widget(list, f.area(), &mut state);
+    f.render_stateful_widget(list, panes[1], &mut state);
+
+    // 底:状态栏
+    let status = Line::from(format!(
+        " step {}/{}  —  ↑/↓ or j/k select · q quit ",
+        app.selected + 1,
+        app.events.len()
+    ));
+    f.render_widget(Paragraph::new(status), outer[1]);
 }
 
 /// 打开 trace 并进入 TUI。
@@ -131,18 +188,19 @@ mod tests {
     }
 
     #[test]
-    fn ui_renders_timeline() {
-        let app = App::new(sample_events());
-        let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
+    fn ui_renders_two_panes_and_status() {
+        let mut app = App::new(sample_events());
+        app.select_next(); // 选中 step 1 (Thought "thinking")
+        let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
         terminal.draw(|f| ui(f, &app)).unwrap();
-        let text: String = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|c| c.symbol())
-            .collect();
-        assert!(text.contains("TASK"), "timeline should show event tags: {text}");
-        assert!(text.contains("Argus Trace"), "should show title: {text}");
+        let text: String = terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        // 右栏时间线
+        assert!(text.contains("Timeline"), "should have timeline pane: {text}");
+        assert!(text.contains("TASK"), "timeline should list events: {text}");
+        // 左栏详情(选中 Thought)
+        assert!(text.contains("Detail"), "should have detail pane: {text}");
+        assert!(text.contains("thinking"), "detail should show selected event content: {text}");
+        // 底部状态栏
+        assert!(text.contains("step 2/3"), "status bar should show position: {text}");
     }
 }
