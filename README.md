@@ -79,7 +79,7 @@ Then point it at *your own* repo with `argus eval` — reliability you can put a
 ## Install
 
 ```bash
-git clone https://github.com/useargus/argus && cd argus
+git clone https://github.com/YOMXXX/argus && cd argus
 cargo install --path crates/argus-cli     # installs `argus` into ~/.cargo/bin
 argus --help
 ```

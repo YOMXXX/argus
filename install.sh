@@ -1,10 +1,10 @@
 #!/bin/sh
 # Argus installer — downloads the latest prebuilt binary from GitHub Releases.
-#   curl -fsSL https://raw.githubusercontent.com/useargus/argus/master/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/YOMXXX/argus/master/install.sh | sh
 # Override install dir with ARGUS_INSTALL_DIR (default: ~/.local/bin).
 set -eu
 
-REPO="useargus/argus"
+REPO="YOMXXX/argus"
 BIN="argus"
 
 os="$(uname -s)"
