@@ -4,11 +4,15 @@
 
 ### *Argus never blinks.*
 
+## The all-in-one AI coding agent that proves it works.
+
 **Don't trust your AI coding agent. Verify it.**
 
-Argus is a production-grade, model-agnostic AI coding agent — **and** the trust layer for the agents you already use (Claude Code · Cursor · Codex). Provable reliability, full auditability, zero lock-in.
+One open-source, model-agnostic tool with the best of every coding agent — Claude Code · Cursor · Codex · Aider — **plus the one thing none of them have:** it *proves* its work with a verification gate and on-repo evals. No lock-in. No black box.
 
 `Rust` · `MIT OR Apache-2.0` · `MCP-native`
+
+<!-- Demo gif: run `vhs benchmarks/demo.tape` to produce demo.gif, then embed it here:  ![Argus demo](benchmarks/demo.gif) -->
 
 </div>
 
@@ -35,6 +39,33 @@ It comes in **two shapes**:
 | 💸 | **Cost-smart routing** | Cheap model first; escalate to a strong model only when verification fails — and it reports exactly what you saved. |
 
 Everything sits on a **black-box Trace** (open JSONL): every thought, tool call, model I/O, token, route decision, and verification result — replayable, forkable, auditable.
+
+## All-in-one — the best of every agent, none of the baggage
+
+| You get the best of… | …without the baggage |
+|---|---|
+| Agent loop · tools · MCP (Claude Code) | no Anthropic lock-in, no black box |
+| Smooth multi-turn flow (Cursor) | no IDE lock-in, no subscription wall |
+| Open · git-friendly · model-agnostic (Aider) | **+ the verification & governance it lacks** |
+| Codebase navigation `list_files` / `search_text` | structured, no shell required |
+| OpenAI · OpenRouter · local Ollama | one provider abstraction, your keys |
+| 🏆 time-travel · verification gate · on-repo eval · cost routing | **what no other agent has** |
+
+## Proven on real tasks
+
+Argus doesn't just claim reliability — it **measures** it. The [reliability benchmark](benchmarks/) runs real coding tasks (fix a bug, implement a function from tests, handle edge cases) and reports a pass-rate:
+
+```bash
+./benchmarks/run-benchmark.sh --provider anthropic --model claude-sonnet-4-5 --yes
+```
+
+| Model | Pass-rate |
+|---|---|
+| claude-sonnet-4-5 | _run it_ |
+| gpt-4o-mini | _run it_ |
+| local llama3.1 | _run it_ |
+
+Then point it at *your own* repo with `argus eval` — reliability you can put a number on.
 
 ## Built for trust
 
