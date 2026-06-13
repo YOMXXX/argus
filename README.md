@@ -4,56 +4,60 @@
 
 ### *Argus never blinks.*
 
-**The open-source, model-agnostic AI coding agent you can actually trust in production.**
+**Don't trust your AI coding agent. Verify it.**
 
-No lock-in. No drift. Fully auditable.
+Argus is a production-grade, model-agnostic AI coding agent — **and** the trust layer for the agents you already use (Claude Code · Cursor · Codex). Provable reliability, full auditability, zero lock-in.
+
+`Rust` · `MIT OR Apache-2.0` · `MCP-native`
 
 </div>
 
 ---
 
-> ⚠️ **Status: early development.** Argus is being built in the open. The design is locked; the code is on its way. Star to follow along.
-
 ## Why Argus?
 
 Today's coding agents are smart — but you can't *trust* them. They drift on long tasks, claim "done" without checking, lock you to one vendor, and give you no way to prove they actually work on *your* codebase. You just... hope.
 
-Argus is built on a different bet: **provable reliability and zero lock-in.** It's named after the hundred-eyed guardian of Greek myth — the one who never closes all his eyes at once.
+Argus makes a different bet: **prove it, don't hope.** Named after the hundred-eyed guardian of Greek myth — the one who never closes all his eyes at once.
+
+It comes in **two shapes**:
+
+1. **A standalone agent** — `argus run "..."` runs the full think→tool→verify loop, recording everything.
+2. **A trust layer for *other* agents** — `argus mcp-serve` exposes Argus's reliability tools over MCP, so Claude Code / Cursor / Codex can call them. Don't switch agents — give the one you have a verification gate and a black box.
 
 ## The four things nobody else does
 
 | | Killer feature | What it means for you |
 |---|---|---|
-| 🎬 | **Time-travel debugging** | Rewind any run to any step. Fork it with a different model or prompt and diff the outcomes — side by side. |
-| 🛡️ | **Provable reliability** | A verification gate kills "fake done" — nothing ships until tests/build/lint pass. Plus an Eval engine that quantifies pass-rate & regressions *on your own repo*. |
-| 🔌 | **Zero-migration** | One command imports your existing skills, MCP servers, and rules (`AGENTS.md` / `CLAUDE.md`) from Claude Code / Cursor / Codex. Defect for free. |
-| 💸 | **Cost-smart routing** | Cheap models for grunt work, strong models for hard problems — automatically. Cut token spend by up to ~70%. |
+| 🎬 | **Time-travel debugging** | Rewind any run to any step. Fork it with a different model and diff the outcomes — side by side. |
+| 🛡️ | **Provable reliability** | A verification gate kills "fake done" — nothing ships until tests/build/lint pass. Plus an Eval engine that quantifies pass-rate & regressions *on your own repo*, with a CI-friendly exit code. |
+| 🔌 | **Zero-migration** | Your existing `AGENTS.md` / `CLAUDE.md` rules load automatically; connect any MCP server and its tools drop in. No rewrite. |
+| 💸 | **Cost-smart routing** | Cheap model first; escalate to a strong model only when verification fails — and it reports exactly what you saved. |
 
-All of it sits on a **black-box Trace** (open JSONL) that records every thought, tool call, model I/O, token, and diff — replayable, forkable, auditable.
+Everything sits on a **black-box Trace** (open JSONL): every thought, tool call, model I/O, token, route decision, and verification result — replayable, forkable, auditable.
 
 ## Built for trust
 
-- 🦀 **Rust core** — single static binary, zero-dependency `curl | sh` install.
-- 🔓 **Model-agnostic** — Anthropic, OpenAI, Google, local, OpenRouter. Your keys, your choice.
-- 🧩 **Open ecosystem** — native MCP, drop-in skills, your existing project rules.
+- 🦀 **Rust core** — three small crates, one `argus` binary, no runtime.
+- 🔓 **Model-agnostic** — Anthropic, OpenAI, OpenRouter, local (Ollama/vLLM/LM Studio). Your keys, your choice.
+- 🧩 **MCP-native** — Argus is both an MCP *client* (consume external tools) and an MCP *server* (expose its own).
 - 📜 **Open everything** — open source, open trace format, no vendor lock.
+
+> **Status:** v1.0 feature-complete (all four killer features + multi-provider + TUI + MCP server work today, with 70+ tests and zero clippy warnings). Prebuilt binaries / `curl | sh` installer / crates.io release are the next step — for now, build from source (30 seconds below).
 
 ## Install
 
-> Phase 0 — build from source. Prebuilt binaries and a `curl | sh` installer land with v1.0.
-
 ```bash
-git clone https://github.com/yourusername/argus argus && cd argus
-cargo build --release
-# binary at target/release/argus
-./target/release/argus --help
+git clone https://github.com/useargus/argus && cd argus
+cargo install --path crates/argus-cli     # installs `argus` into ~/.cargo/bin
+argus --help
 ```
 
 Requires a recent stable Rust toolchain (`rustup`/`cargo`/`rustc`).
 
-## Quick start
+## Quick start (no API key needed)
 
-No API key needed — Phase 0 ships a built-in **mock provider**, so you can see the whole agent loop and the black-box trace immediately:
+Argus ships a built-in **mock provider**, so you can see the whole agent loop and the black box immediately — zero config:
 
 ```bash
 # Run a task. Every step is recorded to an open JSONL trace.
@@ -63,171 +67,28 @@ argus run "add a hello-world endpoint"
 argus trace show .argus/trace.jsonl
 ```
 
-Example output:
+Real output:
 
 ```
 $ argus run "add a hello-world endpoint"
 [mock:mock] acknowledged task: add a hello-world endpoint
 
 $ argus trace show .argus/trace.jsonl
-[   0] THOUGHT  Received task: add a hello-world endpoint
-[   1] MODEL ->  mock (4 prompt tokens)
-[   2] MODEL <-  mock (7 tokens): [mock:mock] acknowledged task: ...
+[   0] TASK     add a hello-world endpoint
+[   1] THOUGHT  Received task: add a hello-world endpoint
+[   2] MODEL ->  mock (4 prompt tokens)
+[   3] MODEL <-  mock (4+4 tokens):
+[   4] TOOL ->   read_file({"path":"mock.txt"})
+[   5] TOOL <-   read_file ok=false: error: No such file or directory
+[   6] MODEL ->  mock (4 prompt tokens)
+[   7] MODEL <-  mock (4+4 tokens): [mock:mock] acknowledged task: ...
 ```
 
-Each step carries a monotonic `step` number — the anchor that time-travel debugging will fork from (Phase 1).
+Every step carries a monotonic `step` number — the anchor that time-travel forks from.
 
-### Use a real model (Anthropic / OpenAI / compatible)
+## Plug Argus into Claude Code / Cursor (the 30-second win)
 
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-argus run "explain this repo" --provider anthropic --model claude-3-5-haiku-latest
-```
-
-`--provider` defaults to `mock` (zero config). With `--provider anthropic`, Argus calls the Anthropic Messages API (non-streaming) and records **real token usage** into the trace.
-
-Argus also speaks the **OpenAI Chat Completions** API — which means OpenAI, OpenRouter, and local servers (Ollama, vLLM, LM Studio) all work through one provider:
-
-```bash
-# OpenAI
-export OPENAI_API_KEY=sk-...
-argus run "explain this repo" --provider openai --model gpt-4o-mini
-
-# Any OpenAI-compatible endpoint (OpenRouter / local Ollama) via --base-url
-argus run "explain this repo" --provider openai --model llama3.1 \
-  --base-url http://localhost:11434/v1
-```
-
-`--base-url` works on `run`, `eval`, and `route`. This is what "model-agnostic" means in practice: same agent, same trace, your choice of model.
-
-### The black box (trace)
-
-Argus writes every run to a JSONL file — one JSON object per line, one line per step. The format is open: fields include `step`, `ts_ms` (Unix milliseconds), and `kind` — a tagged object whose `type` is one of `thought` / `model_request` / `model_response` / `tool_call` / `tool_result` / `diff` / `verification_gate` / `note`, with variant-specific fields inlined alongside it. Read it with any text editor, pipe it through `jq`, or replay it with `argus trace show`.
-
-Capability boundary: a hardened sandbox for tool execution is still on the roadmap.
-
-### Time travel (fork & diff)
-
-Re-run any recorded task with a different model or provider, then compare:
-
-```bash
-argus run "refactor this" --trace .argus/a.jsonl                       # original
-argus trace fork .argus/a.jsonl --provider anthropic \
-  --model claude-3-5-haiku-latest --out .argus/b.jsonl                 # re-run with a real model
-argus trace diff .argus/a.jsonl .argus/b.jsonl                         # side-by-side
-```
-
-`fork` reads the original task from the trace's `task_started` event and replays it — the foundation of step-level time-travel debugging (forking from an arbitrary step lands with the multi-turn agent loop).
-
-### Tools (multi-turn)
-
-Argus runs a real multi-turn loop: the model can call tools, Argus executes them and feeds results back, repeating until done. Phase 3a ships file tools (sandboxed to the working directory):
-
-- `read_file { path }` — read a UTF-8 file
-- `write_file { path, content }` — write a UTF-8 file (creates parents)
-- `run_shell { command }` — run a shell command in the working directory (**requires approval**)
-
-```bash
-argus run "read Cargo.toml and summarize it" --provider anthropic --model claude-3-5-haiku-latest
-```
-
-Every tool call is recorded to the trace (`tool_call` / `tool_result`).
-
-Shell commands are gated: Argus prints each command and asks `y/N` before running. Pass `--yes` to auto-approve (use with care):
-
-```bash
-argus run "run the tests and fix failures" --provider anthropic --model claude-sonnet-4-5 --yes
-```
-
-### Verification gate (no fake "done")
-
-Make the agent prove it's done. Pass one or more `--verify` commands; before Argus reports success, every command must exit 0 — otherwise the failure is fed back and the agent keeps fixing (up to a few attempts):
-
-```bash
-argus run "make the failing test pass" --provider anthropic --model claude-sonnet-4-5 --yes \
-  --verify "cargo build" --verify "cargo test"
-```
-
-Each gate result is recorded to the trace (`verification_gate`). This is how Argus refuses to claim "done" when it isn't.
-
-### Eval (prove it on your repo)
-
-Quantify how reliably the agent completes tasks *on your own codebase*. Define a suite of cases — each a task plus the `verify` commands that decide pass/fail — and Argus runs them all and reports the pass-rate:
-
-```json
-{
-  "name": "smoke",
-  "cases": [
-    { "id": "hello-endpoint", "task": "add a /hello endpoint returning 200",
-      "dir": "fixtures/api", "verify": ["cargo build", "cargo test hello"] }
-  ]
-}
-```
-
-```bash
-argus eval suite.json --provider anthropic --model claude-sonnet-4-5
-```
-
-```
-eval: smoke (1 case(s))
-[PASS] hello-endpoint  → .argus/eval/hello-endpoint.jsonl
-1/1 passed (100%)
-```
-
-Each case writes its own trace under `--out-dir` (default `.argus/eval`), so any failure can be replayed or forked with `argus trace show`/`fork`. Argus exits non-zero if any case fails — drop it straight into CI. (MVP runs each case in place without auto-reset; keep fixtures clean between runs — results are a single-run snapshot.)
-
-### Cost-smart routing (cheap first, escalate on failure)
-
-Run the cheap model first; only if it can't make the verification pass does Argus escalate to a stronger (pricier) model — and it tells you what you saved:
-
-```bash
-argus route "fix the failing test" --provider anthropic \
-  --cheap claude-3-5-haiku-latest --strong claude-sonnet-4-5 \
-  --verify "cargo test"
-```
-
-```
-route: escalated claude-3-5-haiku-latest → claude-sonnet-4-5 (passed)
-cost: $0.0123 actual (cheap $0.0021 + strong $0.0102); vs always-strong $0.0150 → saved $0.0027
-```
-
-The escalation is recorded in the trace as a `route_decision` event (`argus trace show` renders it as a `ROUTE` line). `--verify` is required — it's the objective signal that decides whether the cheap model succeeded. Cost is estimated from real token usage per model.
-
-### Zero-migration: bring your existing rules
-
-Already have an `AGENTS.md` or `CLAUDE.md` in your repo? Argus picks it up automatically and uses it as the system prompt — no setup:
-
-```bash
-argus run "add a test for the parser" --provider anthropic --model claude-sonnet-4-5
-# (loaded rules from AGENTS.md)
-```
-
-Point at a specific file with `--rules <file>`, or turn discovery off with `--no-rules`.
-
-**MCP servers** plug in too — connect any [Model Context Protocol](https://modelcontextprotocol.io) server and Argus injects its tools:
-
-```bash
-argus run "search the docs and summarize" --provider anthropic --model claude-sonnet-4-5 --yes \
-  --mcp "npx -y @modelcontextprotocol/server-everything"
-```
-
-MCP tools run behind the same approval gate as shell commands. That's zero-migration: your existing rules and MCP servers, no rewrite.
-
-### TUI (browse traces like lazygit)
-
-Every run is recorded; `argus tui` opens that black box in an interactive two-pane browser — the Trace timeline as a first-class citizen:
-
-```bash
-argus run "refactor the parser"      # records .argus/trace.jsonl
-argus tui                            # browse it (defaults to .argus/trace.jsonl)
-argus tui .argus/eval/case-1.jsonl   # or any trace
-```
-
-Right pane = the timeline (↑/↓ or j/k to select, `q` to quit); left pane = the selected step's full detail. Built on [ratatui](https://ratatui.rs).
-
-### Plug Argus into Claude Code / Cursor (MCP server)
-
-Argus also runs *as* an MCP server — so any MCP host (Claude Code, Cursor, Codex) can call its reliability tools. Add it to your MCP config:
+Don't want to switch agents? Give your current one a verification gate. Argus runs *as* an MCP server — add it to your MCP config:
 
 ```json
 {
@@ -237,36 +98,141 @@ Argus also runs *as* an MCP server — so any MCP host (Claude Code, Cursor, Cod
 }
 ```
 
-Now your agent has a `verify` tool: it can prove a task is actually done (build/test/lint all exit 0) instead of just claiming it. Argus is both an agent *and* the trust layer for the agents you already use.
+Now your agent has a `verify` tool: it can *prove* a task is actually done (build/test/lint all exit 0) instead of just claiming it. Argus is the trust layer for the agents you already use.
+
+## Use a real model (Anthropic / OpenAI / compatible)
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+argus run "explain this repo" --provider anthropic --model claude-3-5-haiku-latest
+```
+
+`--provider` defaults to `mock` (zero config). Argus also speaks the **OpenAI Chat Completions** API — so OpenAI, OpenRouter, and local servers (Ollama, vLLM, LM Studio) all work through one provider:
+
+```bash
+export OPENAI_API_KEY=sk-...
+argus run "explain this repo" --provider openai --model gpt-4o-mini
+
+# Any OpenAI-compatible endpoint via --base-url (fully offline with Ollama)
+argus run "explain this repo" --provider openai --model llama3.1 \
+  --base-url http://localhost:11434/v1
+```
+
+`--base-url` works on `run`, `eval`, and `route`. Same agent, same trace, your choice of model.
+
+## The killer features, in practice
+
+### 🛡️ Verification gate — no fake "done"
+
+Make the agent prove it. Pass `--verify` commands; before Argus reports success, every command must exit 0 — otherwise the failure is fed back and the agent keeps fixing (with a circuit breaker):
+
+```bash
+argus run "make the failing test pass" --provider anthropic --model claude-sonnet-4-5 --yes \
+  --verify "cargo build" --verify "cargo test"
+```
+
+### 🛡️ Eval — quantify reliability on your own repo
+
+Define a suite (each case = a task + the `verify` commands that decide pass/fail), and Argus reports the pass-rate. **Exits non-zero on any failure — drop it into CI.**
+
+```json
+{ "name": "smoke",
+  "cases": [ { "id": "hello", "task": "add a /hello endpoint returning 200",
+               "dir": "fixtures/api", "verify": ["cargo build", "cargo test hello"] } ] }
+```
+```bash
+argus eval suite.json --provider anthropic --model claude-sonnet-4-5
+# 1/1 passed (100%)  — each case writes its own trace under .argus/eval/
+```
+*(MVP runs each case in place without auto-reset — keep fixtures clean between runs; results are a single-run snapshot.)*
+
+### 💸 Cost-smart routing — cheap first, escalate on failure
+
+```bash
+argus route "fix the failing test" --provider anthropic \
+  --cheap claude-3-5-haiku-latest --strong claude-sonnet-4-5 --verify "cargo test"
+```
+```
+route: escalated claude-3-5-haiku-latest → claude-sonnet-4-5 (passed)
+cost: $0.0123 actual (cheap $0.0021 + strong $0.0102); vs always-strong $0.0150 → saved $0.0027
+```
+`--verify` is the objective signal that decides whether the cheap model succeeded. Cost is estimated from real per-model token usage; the escalation is recorded to the trace as a `ROUTE` event.
+
+### 🎬 Time travel — fork & diff
+
+```bash
+argus trace fork .argus/a.jsonl --provider anthropic \
+  --model claude-3-5-haiku-latest --out .argus/b.jsonl   # re-run the same task, different model
+argus trace diff .argus/a.jsonl .argus/b.jsonl           # side-by-side
+```
+
+### 🔌 Zero-migration — your rules & MCP servers, as-is
+
+```bash
+# AGENTS.md / CLAUDE.md in your repo loads automatically as the system prompt
+argus run "add a test for the parser" --provider anthropic --model claude-sonnet-4-5
+# (loaded rules from AGENTS.md)    — or --rules <file> / --no-rules
+
+# Connect any MCP server; its tools are injected (behind the approval gate)
+argus run "search the docs and summarize" --provider anthropic --model claude-sonnet-4-5 --yes \
+  --mcp "npx -y @modelcontextprotocol/server-everything"
+```
+
+### 🖥️ TUI — browse the black box like lazygit
+
+```bash
+argus tui                            # opens .argus/trace.jsonl
+argus tui .argus/eval/hello.jsonl    # or any trace
+```
+Right pane = the timeline (↑/↓ or j/k to select, `q` to quit); left pane = the selected step's detail. Built on [ratatui](https://ratatui.rs).
+
+### 🔧 Tools
+
+Argus runs a real multi-turn loop — the model calls tools, Argus executes them and feeds results back until done:
+
+- `read_file { path }` / `write_file { path, content }` — UTF-8 files within the working directory
+- `run_shell { command }` — shell command in the working directory (**requires approval**; `--yes` to auto-approve)
+- any tools from a connected MCP server (`--mcp`)
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `argus run <task> [--provider mock\|anthropic] [--model M] [--trace PATH] [--yes] [--verify CMD]` | Run a task through the agent; record every step to a JSONL trace (default `.argus/trace.jsonl`); `--yes` auto-approves shell commands; `--verify` gates completion on commands that must exit 0; auto-loads AGENTS.md/CLAUDE.md as rules (--rules/--no-rules) |
-| `argus trace show [PATH]` | Replay a recorded trace as a readable timeline |
+| `argus run <task> [--provider P] [--model M] [--verify CMD] [--yes] [--base-url URL] [--rules F\|--no-rules] [--mcp "CMD"] [--trace PATH]` | Run a task; record every step to a JSONL trace; verify completion; auto-load rules; inject MCP tools |
+| `argus trace show [PATH]` | Replay a trace as a readable timeline |
 | `argus trace fork <trace> [--provider P] [--model M] [--out PATH]` | Re-run a trace's task with a different provider/model |
 | `argus trace diff <a> <b>` | Compare two traces step by step |
-| `argus eval <suite.json> [--provider P] [--model M] [--out-dir DIR]` | Batch-run an eval suite; report pass-rate, write per-case traces, exit non-zero on any failure |
-| `argus route <task> --cheap M1 --strong M2 --verify CMD [--provider P]` | Run cheap model first, escalate to strong on verification failure; report estimated cost saved |
+| `argus eval <suite.json> [--provider P] [--model M] [--out-dir DIR]` | Batch-run an eval suite; report pass-rate; exit non-zero on any failure |
+| `argus route <task> --cheap M1 --strong M2 --verify CMD [--provider P]` | Cheap model first, escalate on verification failure; report cost saved |
 | `argus tui [trace]` | Browse a trace in an interactive two-pane TUI |
 | `argus mcp-serve` | Run Argus as an MCP server (exposes `verify` to Claude Code / Cursor / any MCP host) |
-| `argus --version` | Print version |
-| `argus --help` | Full help |
 
-> **Coming online next:** sandboxed tool execution.
+## How it works — the black box
+
+Argus writes every run to a JSONL file (one JSON object per step). The format is open: `step`, `ts_ms`, and a tagged `kind` (`task_started` / `thought` / `model_request` / `model_response` / `tool_call` / `tool_result` / `verification_gate` / `route_decision` / `diff` / `note`). Read it with any editor, pipe it through `jq`, or replay/fork it with `argus trace`.
+
+Three crates: `argus-trace` (the open black box) · `argus-core` (model-agnostic provider abstraction + agent loop + verifier/eval/router/MCP) · `argus-cli` (the `argus` binary). Dependency direction is one-way: `cli → core → trace`.
 
 ## Roadmap
 
-- **Phase 0** — Core: agent loop · sandbox · provider abstraction · MCP · skills/AGENTS.md compat · TUI · **Trace black box**
-- **Phase 1** — Reliability spearhead: **verification gate · Eval engine · time-travel debugging**
-- **Phase 1.5** — ✅ Cost-smart routing · drift guard · circuit breaker (planned)
-- **v1.0** — All four killer features, shipped.
-- **Phase 2** — 24/7 multi-channel runs · lightweight governance · hosted SaaS
+**✅ Shipped (v1.0 feature set)** — agent loop · multi-turn tools + approval gate · black-box trace · time-travel fork/diff · verification gate · Eval engine · cost-smart routing · rules import · MCP client + server · TUI · Anthropic / OpenAI / compatible providers.
+
+**Next**
+- 📦 Release engineering: prebuilt binaries, `curl | sh` installer, crates.io
+- 🧱 Hardened tool sandbox
+- 🧰 More `mcp-serve` tools (expose `eval` / `route` to host agents)
+- 🌊 Streaming output in the TUI
+- 🔁 Eval with repeated sampling (statistical pass-rate, not single-snapshot)
+
+**Later** — drift guard · 24/7 multi-channel runs · lightweight governance · hosted option.
+
+## Contributing
+
+Issues and PRs welcome. The codebase is small and the tests are fast (`cargo test --workspace`); `cargo clippy --workspace --all-targets -- -D warnings` must stay clean.
 
 ## License
 
-TBD (will be OSI-approved open source).
+Dual-licensed under **MIT** or **Apache-2.0**, at your option.
 
 ---
 
