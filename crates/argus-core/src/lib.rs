@@ -24,7 +24,7 @@ pub use mcp::{mcp_connect, McpClient, McpTool, McpToolDef};
 pub use openai::OpenAiProvider;
 pub use provider::{MockProvider, Provider};
 pub use router::{run_with_escalation, RouteReport};
-pub use tool::{ReadFile, RunShell, Tool, WriteFile};
+pub use tool::{ListFiles, ReadFile, RunShell, SearchText, Tool, WriteFile};
 pub use types::{
     CompletionRequest, CompletionResponse, Content, Message, Role, StopReason, ToolCall, ToolSpec,
     Usage,

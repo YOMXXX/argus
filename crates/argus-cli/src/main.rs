@@ -5,8 +5,8 @@ use argus_core::{
     mcp_connect, run_suite, run_with_escalation, Approver, CommandVerifier, EvalSuite, Verifier,
 };
 use argus_core::{
-    task_from_trace, Agent, AnthropicProvider, AutoApprover, MockProvider, OpenAiProvider,
-    Provider, ReadFile, RunShell, WriteFile,
+    task_from_trace, Agent, AnthropicProvider, AutoApprover, ListFiles, MockProvider,
+    OpenAiProvider, Provider, ReadFile, RunShell, SearchText, WriteFile,
 };
 use argus_trace::{read_trace, EventKind, TraceWriter};
 use clap::{Parser, Subcommand};
@@ -344,6 +344,8 @@ async fn run_agent(
     }
     tools.push(Box::new(ReadFile::new(".")));
     tools.push(Box::new(WriteFile::new(".")));
+    tools.push(Box::new(ListFiles::new(".")));
+    tools.push(Box::new(SearchText::new(".")));
     tools.push(Box::new(RunShell::new(".")));
     let mut agent = Agent::new(&*p, model, &mut trace)
         .with_tools(tools)

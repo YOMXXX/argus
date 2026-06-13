@@ -158,6 +158,122 @@ impl Tool for RunShell {
     }
 }
 
+const IGNORE_DIRS: &[&str] = &[".git", "target", "node_modules", ".argus"];
+const MAX_RESULTS: usize = 200;
+
+/// 递归收集 root 下的文件相对路径，跳过常见忽略目录与隐藏文件。
+fn walk_files(root: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') || IGNORE_DIRS.contains(&name.as_str()) {
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(rel) = path.strip_prefix(root) {
+                out.push(rel.to_string_lossy().to_string());
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// 列出工作目录的文件（只读）。
+pub struct ListFiles {
+    root: PathBuf,
+}
+impl ListFiles {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+}
+
+#[async_trait]
+impl Tool for ListFiles {
+    fn name(&self) -> &str {
+        "list_files"
+    }
+    fn description(&self) -> &str {
+        "List files in the working directory (recursive; skips .git/target/node_modules and hidden files). Optional 'contains' substring filter on the path."
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type":"object","properties":{"contains":{"type":"string"}},"additionalProperties":false})
+    }
+    async fn execute(&self, input: &Value) -> anyhow::Result<String> {
+        let filter = input.get("contains").and_then(|v| v.as_str());
+        let mut files = walk_files(&self.root);
+        if let Some(f) = filter {
+            files.retain(|p| p.contains(f));
+        }
+        let total = files.len();
+        files.truncate(MAX_RESULTS);
+        let mut out = files.join("\n");
+        if total > MAX_RESULTS {
+            out.push_str(&format!("\n... ({} more)", total - MAX_RESULTS));
+        }
+        Ok(if out.is_empty() { "(no files)".into() } else { out })
+    }
+}
+
+/// 在工作目录内按 substring 搜文件内容（只读）。
+pub struct SearchText {
+    root: PathBuf,
+}
+impl SearchText {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+}
+
+#[async_trait]
+impl Tool for SearchText {
+    fn name(&self) -> &str {
+        "search_text"
+    }
+    fn description(&self) -> &str {
+        "Search file contents for a substring across the working directory. Returns matching lines as 'path:line: text'."
+    }
+    fn input_schema(&self) -> Value {
+        json!({"type":"object","properties":{"pattern":{"type":"string"}},"required":["pattern"],"additionalProperties":false})
+    }
+    async fn execute(&self, input: &Value) -> anyhow::Result<String> {
+        let pattern = input
+            .get("pattern")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("search_text: missing 'pattern'"))?;
+        let mut hits = Vec::new();
+        'outer: for rel in walk_files(&self.root) {
+            let full = self.root.join(&rel);
+            let content = match std::fs::read_to_string(&full) {
+                Ok(c) => c,
+                Err(_) => continue, // 跳过非 UTF-8/二进制文件
+            };
+            for (i, line) in content.lines().enumerate() {
+                if line.contains(pattern) {
+                    hits.push(format!("{}:{}: {}", rel, i + 1, line.trim()));
+                    if hits.len() >= MAX_RESULTS {
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        Ok(if hits.is_empty() {
+            format!("(no matches for {pattern:?})")
+        } else {
+            hits.join("\n")
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,5 +328,41 @@ mod tests {
     async fn read_file_does_not_require_approval() {
         let r = ReadFile::new(".");
         assert!(!r.requires_approval());
+    }
+
+    #[tokio::test]
+    async fn list_files_lists_and_filters() {
+        let root = tmp_root("ls");
+        std::fs::write(root.join("a.txt"), "x").unwrap();
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/b.rs"), "y").unwrap();
+        std::fs::create_dir_all(root.join("target")).unwrap();
+        std::fs::write(root.join("target/ignored.txt"), "z").unwrap();
+
+        let lf = ListFiles::new(&root);
+        let all = lf.execute(&json!({})).await.unwrap();
+        assert!(all.contains("a.txt"), "all: {all}");
+        assert!(all.contains("sub/b.rs"), "all: {all}");
+        assert!(!all.contains("ignored.txt"), "should skip target/: {all}");
+
+        let filtered = lf.execute(&json!({"contains": ".rs"})).await.unwrap();
+        assert!(filtered.contains("sub/b.rs"));
+        assert!(!filtered.contains("a.txt"));
+        assert!(!lf.requires_approval());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn search_text_finds_matches() {
+        let root = tmp_root("search");
+        std::fs::write(root.join("code.rs"), "fn main() {\n    let token = 42;\n}\n").unwrap();
+        let st = SearchText::new(&root);
+        let hits = st.execute(&json!({"pattern": "token"})).await.unwrap();
+        assert!(hits.contains("code.rs:2:"), "hits: {hits}");
+        assert!(hits.contains("token"), "hits: {hits}");
+        let none = st.execute(&json!({"pattern": "zzzznotfound"})).await.unwrap();
+        assert!(none.contains("no matches"), "none: {none}");
+        assert!(!st.requires_approval());
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

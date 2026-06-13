@@ -191,6 +191,7 @@ Right pane = the timeline (↑/↓ or j/k to select, `q` to quit); left pane = t
 Argus runs a real multi-turn loop — the model calls tools, Argus executes them and feeds results back until done:
 
 - `read_file { path }` / `write_file { path, content }` — UTF-8 files within the working directory
+- `list_files { contains? }` / `search_text { pattern }` — explore the codebase (read-only, no approval needed)
 - `run_shell { command }` — shell command in the working directory (**requires approval**; `--yes` to auto-approve)
 - any tools from a connected MCP server (`--mcp`)
 
