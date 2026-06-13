@@ -3,6 +3,11 @@ name = "argus-trace"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
 description = "Argus black-box trace: an open JSONL event log for AI agent runs."
 
 [dependencies]

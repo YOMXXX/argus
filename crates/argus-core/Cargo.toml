@@ -3,6 +3,11 @@ name = "argus-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
 description = "Argus core: model-agnostic provider abstraction and the agent loop."
 
 [dependencies]
