@@ -97,6 +97,9 @@ enum Commands {
         #[arg(long = "base-url")]
         base_url: Option<String>,
     },
+    /// (internal) Minimal MCP server over stdio for end-to-end tests.
+    #[command(name = "__mcp-mock", hide = true)]
+    McpMock,
 }
 
 #[derive(Subcommand)]
@@ -221,6 +224,7 @@ async fn main() -> Result<()> {
         Commands::Route { task, cheap, strong, verify, provider, trace, base_url } => {
             route_run(&task, &cheap, &strong, &verify, &provider, &trace, base_url.as_deref()).await
         }
+        Commands::McpMock => mcp_mock().await,
     }
 }
 
@@ -400,5 +404,58 @@ async fn route_run(
         actual, report.cheap_cost, report.strong_cost, report.always_strong_cost, saved
     );
     eprintln!("(trace written to {})", trace_path.display());
+    Ok(())
+}
+
+/// 一个最小 MCP server(stdio,newline JSON-RPC):提供单个 `echo` 工具。仅用于端到端测试。
+async fn mcp_mock() -> Result<()> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let mut reader = BufReader::new(tokio::io::stdin());
+    let mut stdout = tokio::io::stdout();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).await?;
+        if n == 0 {
+            break;
+        }
+        let msg: serde_json::Value = match serde_json::from_str(line.trim()) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let method = msg.get("method").and_then(|v| v.as_str()).unwrap_or("");
+        let id = msg.get("id").cloned().unwrap_or(serde_json::Value::Null);
+        let response = match method {
+            "initialize" => Some(serde_json::json!({
+                "jsonrpc": "2.0", "id": id,
+                "result": {"protocolVersion": "2024-11-05", "capabilities": {}, "serverInfo": {"name": "argus-mock", "version": "1"}}
+            })),
+            "tools/list" => Some(serde_json::json!({
+                "jsonrpc": "2.0", "id": id,
+                "result": {"tools": [{
+                    "name": "echo",
+                    "description": "Echo back the msg argument.",
+                    "inputSchema": {"type": "object", "properties": {"msg": {"type": "string"}}, "required": ["msg"]}
+                }]}
+            })),
+            "tools/call" => {
+                let m = msg
+                    .get("params")
+                    .and_then(|p| p.get("arguments"))
+                    .and_then(|a| a.get("msg"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                Some(serde_json::json!({
+                    "jsonrpc": "2.0", "id": id,
+                    "result": {"content": [{"type": "text", "text": format!("echo: {m}")}]}
+                }))
+            }
+            _ => None, // 通知(如 notifications/initialized)无需响应
+        };
+        if let Some(resp) = response {
+            stdout.write_all(format!("{resp}\n").as_bytes()).await?;
+            stdout.flush().await?;
+        }
+    }
     Ok(())
 }
