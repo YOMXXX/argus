@@ -104,7 +104,7 @@ argus run "explain this repo" --provider openai --model llama3.1 \
 
 Argus writes every run to a JSONL file — one JSON object per line, one line per step. The format is open: fields include `step`, `ts_ms` (Unix milliseconds), and `kind` — a tagged object whose `type` is one of `thought` / `model_request` / `model_response` / `tool_call` / `tool_result` / `diff` / `verification_gate` / `note`, with variant-specific fields inlined alongside it. Read it with any text editor, pipe it through `jq`, or replay it with `argus trace show`.
 
-Capability boundary: sandboxed tool execution, TUI, and MCP/skills import are still coming (see Roadmap).
+Capability boundary: sandboxed tool execution and a TUI are still coming (see Roadmap).
 
 ### Time travel (fork & diff)
 
@@ -202,7 +202,16 @@ argus run "add a test for the parser" --provider anthropic --model claude-sonnet
 # (loaded rules from AGENTS.md)
 ```
 
-Point at a specific file with `--rules <file>`, or turn discovery off with `--no-rules`. (MCP servers and skills import are next on the roadmap.)
+Point at a specific file with `--rules <file>`, or turn discovery off with `--no-rules`.
+
+**MCP servers** plug in too — connect any [Model Context Protocol](https://modelcontextprotocol.io) server and Argus injects its tools:
+
+```bash
+argus run "search the docs and summarize" --provider anthropic --model claude-sonnet-4-5 --yes \
+  --mcp "npx -y @modelcontextprotocol/server-everything"
+```
+
+MCP tools run behind the same approval gate as shell commands. That's zero-migration: your existing rules and MCP servers, no rewrite.
 
 ## Commands
 
@@ -217,7 +226,7 @@ Point at a specific file with `--rules <file>`, or turn discovery off with `--no
 | `argus --version` | Print version |
 | `argus --help` | Full help |
 
-> **Coming online next:** sandboxed tool execution · TUI · MCP & skills import.
+> **Coming online next:** sandboxed tool execution · TUI.
 
 ## Roadmap
 

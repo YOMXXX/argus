@@ -3,7 +3,7 @@ use argus_core::{
     task_from_trace, Agent, AnthropicProvider, AutoApprover, MockProvider, OpenAiProvider,
     Provider, ReadFile, RunShell, WriteFile,
 };
-use argus_core::{run_suite, run_with_escalation, Approver, CommandVerifier, EvalSuite, Verifier};
+use argus_core::{run_suite, run_with_escalation, mcp_connect, Approver, CommandVerifier, EvalSuite, Verifier};
 use argus_trace::{read_trace, EventKind, TraceWriter};
 use clap::{Parser, Subcommand};
 use std::io::{BufRead, Write};
@@ -51,6 +51,9 @@ enum Commands {
         /// Disable auto-discovery of AGENTS.md / CLAUDE.md.
         #[arg(long = "no-rules")]
         no_rules: bool,
+        /// Connect an MCP server (command line) and inject its tools, e.g. --mcp "npx -y @modelcontextprotocol/server-everything".
+        #[arg(long)]
+        mcp: Option<String>,
     },
     /// Inspect a recorded trace.
     Trace {
@@ -208,8 +211,8 @@ fn make_provider(provider: &str, base_url: Option<&str>) -> Result<Box<dyn Provi
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().command {
-        Commands::Run { task, model, trace, provider, yes, verify, base_url, rules, no_rules } => {
-            run(&provider, &task, &model, &trace, yes, &verify, base_url.as_deref(), rules.as_deref(), no_rules).await
+        Commands::Run { task, model, trace, provider, yes, verify, base_url, rules, no_rules, mcp } => {
+            run(&provider, &task, &model, &trace, yes, &verify, base_url.as_deref(), rules.as_deref(), no_rules, mcp.as_deref()).await
         }
         Commands::Trace { command } => match command {
             TraceCommands::Show { path } => trace_show(&path),
@@ -229,7 +232,7 @@ async fn main() -> Result<()> {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path, yes: bool, verify: &[String], base_url: Option<&str>, system: Option<String>) -> Result<String> {
+async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path, yes: bool, verify: &[String], base_url: Option<&str>, system: Option<String>, mcp: Option<&str>) -> Result<String> {
     if let Some(parent) = trace_path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
@@ -246,12 +249,21 @@ async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path, y
     let make_verifier = || -> Option<Box<dyn Verifier>> {
         if verify.is_empty() { None } else { Some(Box::new(CommandVerifier::new(".", verify.to_vec()))) }
     };
+    let mut tools: Vec<Box<dyn argus_core::Tool>> = Vec::new();
+    if let Some(cmd) = mcp {
+        let mut parts = cmd.split_whitespace();
+        let program = parts.next().ok_or_else(|| anyhow::anyhow!("--mcp needs a command"))?;
+        let mcp_args: Vec<String> = parts.map(|s| s.to_string()).collect();
+        let mcp_tools = mcp_connect(program, &mcp_args).await
+            .map_err(|e| anyhow::anyhow!("failed to connect MCP server: {e}"))?;
+        eprintln!("(connected MCP server: {} tool(s))", mcp_tools.len());
+        tools.extend(mcp_tools);
+    }
+    tools.push(Box::new(ReadFile::new(".")));
+    tools.push(Box::new(WriteFile::new(".")));
+    tools.push(Box::new(RunShell::new(".")));
     let mut agent = Agent::new(&*p, model, &mut trace)
-        .with_tools(vec![
-            Box::new(ReadFile::new(".")),
-            Box::new(WriteFile::new(".")),
-            Box::new(RunShell::new(".")),
-        ])
+        .with_tools(tools)
         .with_approver(make_approver());
     if let Some(s) = system {
         agent = agent.with_system(s);
@@ -263,9 +275,9 @@ async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path, y
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run(provider: &str, task: &str, model: &str, trace_path: &Path, yes: bool, verify: &[String], base_url: Option<&str>, rules: Option<&Path>, no_rules: bool) -> Result<()> {
+async fn run(provider: &str, task: &str, model: &str, trace_path: &Path, yes: bool, verify: &[String], base_url: Option<&str>, rules: Option<&Path>, no_rules: bool, mcp: Option<&str>) -> Result<()> {
     let system = resolve_rules(rules, no_rules)?;
-    let output = run_agent(provider, model, task, trace_path, yes, verify, base_url, system).await?;
+    let output = run_agent(provider, model, task, trace_path, yes, verify, base_url, system, mcp).await?;
     println!("{output}");
     eprintln!("(trace written to {})", trace_path.display());
     Ok(())
@@ -283,7 +295,7 @@ async fn trace_fork(src: &Path, provider: &str, model: &str, out: Option<&Path>)
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| src.with_extension("fork.jsonl"));
     eprintln!("forking task from {}: {task:?}", src.display());
-    let output = run_agent(provider, model, &task, &out_path, true, &[], None, None).await?;
+    let output = run_agent(provider, model, &task, &out_path, true, &[], None, None, None).await?;
     println!("{output}");
     eprintln!("(forked trace written to {})", out_path.display());
     Ok(())

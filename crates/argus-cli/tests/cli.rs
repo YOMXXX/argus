@@ -343,3 +343,29 @@ fn run_no_rules_flag_disables_discovery() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn run_with_mcp_server_injects_and_calls_tool() {
+    let dir = std::env::temp_dir().join(format!("argus-mcp-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let trace = dir.join("t.jsonl");
+
+    // 用 argus 自己的 __mcp-mock 作为 MCP server;mock provider 会调第一个工具(echo)。
+    let run = Command::new(bin())
+        .args(["run", "use the tool", "--yes", "--mcp"])
+        .arg(format!("{} __mcp-mock", bin()))
+        .arg("--trace")
+        .arg(&trace)
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "run --mcp failed: {run:?}");
+
+    // trace 里应出现对 echo 工具的调用与结果
+    let show = Command::new(bin()).args(["trace", "show"]).arg(&trace).output().unwrap();
+    let s = String::from_utf8_lossy(&show.stdout);
+    assert!(s.contains("echo"), "should have called the MCP echo tool: {s}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
