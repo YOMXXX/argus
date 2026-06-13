@@ -13,17 +13,35 @@ fn price_for(model: &str) -> Price {
     let m = model.to_ascii_lowercase();
     // 顺序敏感:先匹配更具体的关键词
     if m.contains("haiku") {
-        Price { input_per_mtok: 0.80, output_per_mtok: 4.00 }
+        Price {
+            input_per_mtok: 0.80,
+            output_per_mtok: 4.00,
+        }
     } else if m.contains("opus") {
-        Price { input_per_mtok: 15.00, output_per_mtok: 75.00 }
+        Price {
+            input_per_mtok: 15.00,
+            output_per_mtok: 75.00,
+        }
     } else if m.contains("sonnet") {
-        Price { input_per_mtok: 3.00, output_per_mtok: 15.00 }
+        Price {
+            input_per_mtok: 3.00,
+            output_per_mtok: 15.00,
+        }
     } else if m.contains("gpt-4o-mini") {
-        Price { input_per_mtok: 0.15, output_per_mtok: 0.60 }
+        Price {
+            input_per_mtok: 0.15,
+            output_per_mtok: 0.60,
+        }
     } else if m.contains("gpt-4o") {
-        Price { input_per_mtok: 2.50, output_per_mtok: 10.00 }
+        Price {
+            input_per_mtok: 2.50,
+            output_per_mtok: 10.00,
+        }
     } else {
-        Price { input_per_mtok: 0.0, output_per_mtok: 0.0 }
+        Price {
+            input_per_mtok: 0.0,
+            output_per_mtok: 0.0,
+        }
     }
 }
 

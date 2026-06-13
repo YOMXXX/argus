@@ -1,7 +1,9 @@
 //! Anthropic Messages API provider（含 tools 与 content blocks）。
 
 use crate::provider::Provider;
-use crate::types::{CompletionRequest, CompletionResponse, Content, Role, StopReason, ToolCall, Usage};
+use crate::types::{
+    CompletionRequest, CompletionResponse, Content, Role, StopReason, ToolCall, Usage,
+};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -35,7 +37,11 @@ fn to_anthropic_body(req: &CompletionRequest, max_tokens: u32) -> Value {
             system_parts.push(m.text());
             continue;
         }
-        let role = if matches!(m.role, Role::Assistant) { "assistant" } else { "user" };
+        let role = if matches!(m.role, Role::Assistant) {
+            "assistant"
+        } else {
+            "user"
+        };
         let blocks: Vec<Value> = m.content.iter().map(|c| match c {
             Content::Text { text } => json!({"type": "text", "text": text}),
             Content::ToolUse { id, name, input } => json!({"type": "tool_use", "id": id, "name": name, "input": input}),
@@ -45,14 +51,24 @@ fn to_anthropic_body(req: &CompletionRequest, max_tokens: u32) -> Value {
         messages.push(json!({"role": role, "content": blocks}));
     }
     let mut body = json!({"model": req.model, "max_tokens": max_tokens, "messages": messages});
-    let system: String = system_parts.into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n\n");
+    let system: String = system_parts
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
     if !system.is_empty() {
         body["system"] = json!(system);
     }
     if !req.tools.is_empty() {
-        let tools: Vec<Value> = req.tools.iter().map(|t| json!({
-            "name": t.name, "description": t.description, "input_schema": t.input_schema
-        })).collect();
+        let tools: Vec<Value> = req
+            .tools
+            .iter()
+            .map(|t| {
+                json!({
+                    "name": t.name, "description": t.description, "input_schema": t.input_schema
+                })
+            })
+            .collect();
         body["tools"] = json!(tools);
     }
     body
@@ -80,7 +96,9 @@ impl AnthropicProvider {
 
 #[async_trait]
 impl Provider for AnthropicProvider {
-    fn name(&self) -> &str { "anthropic" }
+    fn name(&self) -> &str {
+        "anthropic"
+    }
 
     async fn complete(&self, req: &CompletionRequest) -> anyhow::Result<CompletionResponse> {
         let body = to_anthropic_body(req, DEFAULT_MAX_TOKENS);
@@ -110,8 +128,16 @@ impl Provider for AnthropicProvider {
                 }
                 Some("tool_use") => {
                     tool_calls.push(ToolCall {
-                        id: block.get("id").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                        name: block.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+                        id: block
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        name: block
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
                         input: block.get("input").cloned().unwrap_or_else(|| json!({})),
                     });
                 }
@@ -126,7 +152,10 @@ impl Provider for AnthropicProvider {
         Ok(CompletionResponse {
             text,
             tool_calls,
-            usage: Usage { prompt_tokens: parsed.usage.input_tokens, completion_tokens: parsed.usage.output_tokens },
+            usage: Usage {
+                prompt_tokens: parsed.usage.input_tokens,
+                completion_tokens: parsed.usage.output_tokens,
+            },
             stop_reason,
         })
     }
@@ -144,7 +173,11 @@ mod tests {
         let req = CompletionRequest {
             model: "claude-x".into(),
             messages: vec![Message::system("be terse"), Message::user("hi")],
-            tools: vec![ToolSpec { name: "read_file".into(), description: "r".into(), input_schema: json!({"type":"object"}) }],
+            tools: vec![ToolSpec {
+                name: "read_file".into(),
+                description: "r".into(),
+                input_schema: json!({"type":"object"}),
+            }],
         };
         let body = to_anthropic_body(&req, 1024);
         assert_eq!(body["system"], json!("be terse"));
@@ -156,7 +189,11 @@ mod tests {
 
     #[test]
     fn body_omits_system_and_tools_when_absent() {
-        let req = CompletionRequest { model: "m".into(), messages: vec![Message::user("hi")], tools: vec![] };
+        let req = CompletionRequest {
+            model: "m".into(),
+            messages: vec![Message::user("hi")],
+            tools: vec![],
+        };
         let body = to_anthropic_body(&req, 16);
         assert!(body.get("system").is_none());
         assert!(body.get("tools").is_none());
@@ -166,25 +203,45 @@ mod tests {
     fn body_serializes_tool_result_block() {
         let req = CompletionRequest {
             model: "m".into(),
-            messages: vec![Message { role: Role::User, content: vec![Content::ToolResult { tool_use_id: "t1".into(), content: "ok".into(), is_error: false }] }],
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![Content::ToolResult {
+                    tool_use_id: "t1".into(),
+                    content: "ok".into(),
+                    is_error: false,
+                }],
+            }],
             tools: vec![],
         };
         let body = to_anthropic_body(&req, 16);
-        assert_eq!(body["messages"][0]["content"][0]["type"], json!("tool_result"));
-        assert_eq!(body["messages"][0]["content"][0]["tool_use_id"], json!("t1"));
+        assert_eq!(
+            body["messages"][0]["content"][0]["type"],
+            json!("tool_result")
+        );
+        assert_eq!(
+            body["messages"][0]["content"][0]["tool_use_id"],
+            json!("t1")
+        );
     }
 
     #[tokio::test]
     async fn complete_parses_text_end_turn() {
         let server = MockServer::start().await;
-        Mock::given(method("POST")).and(path("/v1/messages"))
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "content": [{"type":"text","text":"hello"}],
                 "usage": {"input_tokens":5,"output_tokens":2},
                 "stop_reason": "end_turn"
-            }))).mount(&server).await;
+            })))
+            .mount(&server)
+            .await;
         let p = AnthropicProvider::with_base_url("k", server.uri());
-        let req = CompletionRequest { model: "m".into(), messages: vec![Message::user("hi")], tools: vec![] };
+        let req = CompletionRequest {
+            model: "m".into(),
+            messages: vec![Message::user("hi")],
+            tools: vec![],
+        };
         let resp = p.complete(&req).await.unwrap();
         assert_eq!(resp.text, "hello");
         assert!(resp.tool_calls.is_empty());
@@ -196,7 +253,9 @@ mod tests {
     #[tokio::test]
     async fn complete_parses_tool_use() {
         let server = MockServer::start().await;
-        Mock::given(method("POST")).and(path("/v1/messages")).and(header("x-api-key", "k"))
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(header("x-api-key", "k"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "content": [
                     {"type":"text","text":"let me read"},
@@ -204,12 +263,18 @@ mod tests {
                 ],
                 "usage": {"input_tokens":7,"output_tokens":3},
                 "stop_reason": "tool_use"
-            }))).mount(&server).await;
+            })))
+            .mount(&server)
+            .await;
         let p = AnthropicProvider::with_base_url("k", server.uri());
         let req = CompletionRequest {
             model: "m".into(),
             messages: vec![Message::user("read a.txt")],
-            tools: vec![ToolSpec { name: "read_file".into(), description: "r".into(), input_schema: json!({}) }],
+            tools: vec![ToolSpec {
+                name: "read_file".into(),
+                description: "r".into(),
+                input_schema: json!({}),
+            }],
         };
         let resp = p.complete(&req).await.unwrap();
         assert_eq!(resp.stop_reason, StopReason::ToolUse);
@@ -223,12 +288,19 @@ mod tests {
     #[tokio::test]
     async fn complete_surfaces_api_error_body() {
         let server = MockServer::start().await;
-        Mock::given(method("POST")).and(path("/v1/messages"))
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
             .respond_with(ResponseTemplate::new(400).set_body_json(json!({
                 "error": {"message":"credit balance is too low"}
-            }))).mount(&server).await;
+            })))
+            .mount(&server)
+            .await;
         let p = AnthropicProvider::with_base_url("k", server.uri());
-        let req = CompletionRequest { model: "m".into(), messages: vec![Message::user("hi")], tools: vec![] };
+        let req = CompletionRequest {
+            model: "m".into(),
+            messages: vec![Message::user("hi")],
+            tools: vec![],
+        };
         let err = p.complete(&req).await.unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("400"), "err: {msg}");

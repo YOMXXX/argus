@@ -22,9 +22,16 @@ pub struct TraceEvent {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EventKind {
     /// 任务开始：记录原始任务文本，供时间旅行 fork 重建。
-    TaskStarted { task: String },
-    Thought { text: String },
-    ModelRequest { model: String, prompt_tokens: u64 },
+    TaskStarted {
+        task: String,
+    },
+    Thought {
+        text: String,
+    },
+    ModelRequest {
+        model: String,
+        prompt_tokens: u64,
+    },
     ModelResponse {
         model: String,
         #[serde(default)]
@@ -37,12 +44,28 @@ pub enum EventKind {
         /// 工具参数，JSON 编码的字符串。
         args: String,
     },
-    ToolResult { name: String, ok: bool, output: String },
-    Diff { path: String, patch: String },
-    VerificationGate { passed: bool, detail: String },
+    ToolResult {
+        name: String,
+        ok: bool,
+        output: String,
+    },
+    Diff {
+        path: String,
+        patch: String,
+    },
+    VerificationGate {
+        passed: bool,
+        detail: String,
+    },
     /// 省钱路由:从便宜模型升级到强模型(验证失败触发)。
-    RouteDecision { from_model: String, to_model: String, reason: String },
-    Note { text: String },
+    RouteDecision {
+        from_model: String,
+        to_model: String,
+        reason: String,
+    },
+    Note {
+        text: String,
+    },
 }
 
 fn now_ms() -> u64 {
@@ -76,7 +99,11 @@ impl TraceWriter {
 
     /// 记录一个事件：自动分配 step 与时间戳，写入一行 JSON。
     pub fn record(&mut self, kind: EventKind) -> anyhow::Result<TraceEvent> {
-        let event = TraceEvent { step: self.next_step, ts_ms: now_ms(), kind };
+        let event = TraceEvent {
+            step: self.next_step,
+            ts_ms: now_ms(),
+            kind,
+        };
         self.next_step += 1;
         let line = serde_json::to_string(&event)?;
         writeln!(self.file, "{line}")?;
@@ -123,7 +150,9 @@ mod tests {
         let event = TraceEvent {
             step: 0,
             ts_ms: 0,
-            kind: EventKind::TaskStarted { task: "build X".into() },
+            kind: EventKind::TaskStarted {
+                task: "build X".into(),
+            },
         };
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"type\":\"task_started\""));
@@ -136,7 +165,9 @@ mod tests {
         let event = TraceEvent {
             step: 3,
             ts_ms: 1234,
-            kind: EventKind::Thought { text: "hello".into() },
+            kind: EventKind::Thought {
+                text: "hello".into(),
+            },
         };
         let json = serde_json::to_string(&event).unwrap();
         let back: TraceEvent = serde_json::from_str(&json).unwrap();
@@ -159,7 +190,11 @@ mod tests {
         let back: TraceEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, back);
         match &back.kind {
-            EventKind::ModelResponse { prompt_tokens, completion_tokens, .. } => {
+            EventKind::ModelResponse {
+                prompt_tokens,
+                completion_tokens,
+                ..
+            } => {
                 assert_eq!(*prompt_tokens, 11);
                 assert_eq!(*completion_tokens, 42);
             }
@@ -172,7 +207,11 @@ mod tests {
         let raw = r#"{"step":0,"ts_ms":0,"kind":{"type":"model_response","model":"m","completion_tokens":5,"text":"hi"}}"#;
         let event: TraceEvent = serde_json::from_str(raw).unwrap();
         match event.kind {
-            EventKind::ModelResponse { prompt_tokens, completion_tokens, .. } => {
+            EventKind::ModelResponse {
+                prompt_tokens,
+                completion_tokens,
+                ..
+            } => {
                 assert_eq!(prompt_tokens, 0);
                 assert_eq!(completion_tokens, 5);
             }
@@ -229,7 +268,11 @@ mod tests {
 
     fn tmp_path(tag: &str) -> std::path::PathBuf {
         let mut p = std::env::temp_dir();
-        p.push(format!("argus-trace-test-{}-{}.jsonl", std::process::id(), tag));
+        p.push(format!(
+            "argus-trace-test-{}-{}.jsonl",
+            std::process::id(),
+            tag
+        ));
         let _ = std::fs::remove_file(&p);
         p
     }
@@ -257,10 +300,17 @@ mod tests {
         let path = tmp_path("resume");
         {
             let mut w = TraceWriter::create(&path).unwrap();
-            w.record(EventKind::Note { text: "first".into() }).unwrap(); // step 0
+            w.record(EventKind::Note {
+                text: "first".into(),
+            })
+            .unwrap(); // step 0
         }
         let mut w = TraceWriter::create(&path).unwrap();
-        let e = w.record(EventKind::Note { text: "second".into() }).unwrap();
+        let e = w
+            .record(EventKind::Note {
+                text: "second".into(),
+            })
+            .unwrap();
         assert_eq!(e.step, 1);
         let events = read_trace(&path).unwrap();
         assert_eq!(events.len(), 2);
@@ -272,9 +322,21 @@ mod tests {
     #[test]
     fn truncate_at_keeps_steps_up_to_target() {
         let events = vec![
-            TraceEvent { step: 0, ts_ms: 0, kind: EventKind::Note { text: "0".into() } },
-            TraceEvent { step: 1, ts_ms: 0, kind: EventKind::Note { text: "1".into() } },
-            TraceEvent { step: 2, ts_ms: 0, kind: EventKind::Note { text: "2".into() } },
+            TraceEvent {
+                step: 0,
+                ts_ms: 0,
+                kind: EventKind::Note { text: "0".into() },
+            },
+            TraceEvent {
+                step: 1,
+                ts_ms: 0,
+                kind: EventKind::Note { text: "1".into() },
+            },
+            TraceEvent {
+                step: 2,
+                ts_ms: 0,
+                kind: EventKind::Note { text: "2".into() },
+            },
         ];
         let cut = truncate_at(&events, 1);
         assert_eq!(cut.len(), 2);

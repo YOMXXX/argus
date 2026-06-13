@@ -24,7 +24,10 @@ pub struct CommandVerifier {
 
 impl CommandVerifier {
     pub fn new(root: impl Into<PathBuf>, commands: Vec<String>) -> Self {
-        Self { root: root.into(), commands }
+        Self {
+            root: root.into(),
+            commands,
+        }
     }
 }
 
@@ -33,24 +36,36 @@ impl Verifier for CommandVerifier {
     async fn verify(&self) -> VerifyResult {
         for cmd in &self.commands {
             let output = match tokio::process::Command::new("sh")
-                .arg("-c").arg(cmd)
+                .arg("-c")
+                .arg(cmd)
                 .current_dir(&self.root)
                 .output()
                 .await
             {
                 Ok(o) => o,
-                Err(e) => return VerifyResult { passed: false, detail: format!("`{cmd}` failed to spawn: {e}") },
+                Err(e) => {
+                    return VerifyResult {
+                        passed: false,
+                        detail: format!("`{cmd}` failed to spawn: {e}"),
+                    }
+                }
             };
             if !output.status.success() {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 return VerifyResult {
                     passed: false,
-                    detail: format!("`{cmd}` exited {}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}", output.status),
+                    detail: format!(
+                        "`{cmd}` exited {}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+                        output.status
+                    ),
                 };
             }
         }
-        VerifyResult { passed: true, detail: format!("{} check(s) passed", self.commands.len()) }
+        VerifyResult {
+            passed: true,
+            detail: format!("{} check(s) passed", self.commands.len()),
+        }
     }
 }
 
@@ -77,7 +92,10 @@ mod tests {
     #[tokio::test]
     async fn fails_with_output_when_a_command_fails() {
         let root = tmp_root("fail");
-        let v = CommandVerifier::new(&root, vec!["echo before".into(), "sh -c 'echo boom >&2; exit 1'".into()]);
+        let v = CommandVerifier::new(
+            &root,
+            vec!["echo before".into(), "sh -c 'echo boom >&2; exit 1'".into()],
+        );
         let r = v.verify().await;
         assert!(!r.passed);
         assert!(r.detail.contains("boom"), "detail: {}", r.detail);

@@ -8,7 +8,9 @@ pub trait Approver: Send + Sync {
 /// 总是放行（用于 --yes 或测试）。
 pub struct AutoApprover;
 impl Approver for AutoApprover {
-    fn approve(&self, _tool_name: &str, _args: &str) -> bool { true }
+    fn approve(&self, _tool_name: &str, _args: &str) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

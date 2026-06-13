@@ -17,19 +17,19 @@ pub mod verifier;
 
 pub use agent::Agent;
 pub use anthropic::AnthropicProvider;
-pub use openai::OpenAiProvider;
 pub use approver::{Approver, AutoApprover};
 pub use cost::estimate_cost;
-pub use router::{run_with_escalation, RouteReport};
 pub use eval::{run_suite, CaseResult, EvalCase, EvalSuite, SuiteReport};
 pub use mcp::{mcp_connect, McpClient, McpTool, McpToolDef};
+pub use openai::OpenAiProvider;
 pub use provider::{MockProvider, Provider};
+pub use router::{run_with_escalation, RouteReport};
 pub use tool::{ReadFile, RunShell, Tool, WriteFile};
-pub use verifier::{CommandVerifier, VerifyResult, Verifier};
 pub use types::{
     CompletionRequest, CompletionResponse, Content, Message, Role, StopReason, ToolCall, ToolSpec,
     Usage,
 };
+pub use verifier::{CommandVerifier, Verifier, VerifyResult};
 
 /// 从一段 trace 中提取原始任务文本（读第一个 TaskStarted 事件）。
 pub fn task_from_trace(events: &[TraceEvent]) -> Option<String> {

@@ -5,7 +5,7 @@ use crate::approver::AutoApprover;
 use crate::cost::estimate_cost;
 use crate::provider::Provider;
 use crate::tool::{ReadFile, RunShell, WriteFile};
-use crate::verifier::{CommandVerifier, VerifyResult, Verifier};
+use crate::verifier::{CommandVerifier, Verifier, VerifyResult};
 use argus_trace::{read_trace, EventKind, TraceWriter};
 use std::path::Path;
 
@@ -48,11 +48,16 @@ async fn run_one(
                 Box::new(RunShell::new(work_dir)),
             ])
             .with_approver(Box::new(AutoApprover))
-            .with_verifier(Box::new(CommandVerifier::new(work_dir, verify_cmds.to_vec())));
+            .with_verifier(Box::new(CommandVerifier::new(
+                work_dir,
+                verify_cmds.to_vec(),
+            )));
         text = agent.run(task).await?;
     }
     // 独立裁决,作为是否升级的判据(Agent::run 熔断后仍返 Ok,故须独立判断)。
-    let verdict = CommandVerifier::new(work_dir, verify_cmds.to_vec()).verify().await;
+    let verdict = CommandVerifier::new(work_dir, verify_cmds.to_vec())
+        .verify()
+        .await;
     Ok((text, verdict))
 }
 
@@ -61,7 +66,13 @@ fn sum_tokens(events: &[argus_trace::TraceEvent], model: &str) -> (u64, u64) {
     let mut p = 0u64;
     let mut c = 0u64;
     for e in events {
-        if let EventKind::ModelResponse { model: m, prompt_tokens, completion_tokens, .. } = &e.kind {
+        if let EventKind::ModelResponse {
+            model: m,
+            prompt_tokens,
+            completion_tokens,
+            ..
+        } = &e.kind
+        {
             if m == model {
                 p += prompt_tokens;
                 c += completion_tokens;
@@ -91,8 +102,15 @@ pub async fn run_with_escalation(
     let mut trace = TraceWriter::create(trace_path)?;
 
     // 第一档:便宜模型
-    let (cheap_text, cheap_verdict) =
-        run_one(provider, cheap_model, work_dir, verify_cmds, task, &mut trace).await?;
+    let (cheap_text, cheap_verdict) = run_one(
+        provider,
+        cheap_model,
+        work_dir,
+        verify_cmds,
+        task,
+        &mut trace,
+    )
+    .await?;
 
     let (escalated, passed, final_text) = if cheap_verdict.passed || strong_model == cheap_model {
         (false, cheap_verdict.passed, cheap_text)
@@ -103,8 +121,15 @@ pub async fn run_with_escalation(
             to_model: strong_model.to_string(),
             reason: format!("cheap model verification failed: {}", cheap_verdict.detail),
         })?;
-        let (strong_text, strong_verdict) =
-            run_one(provider, strong_model, work_dir, verify_cmds, task, &mut trace).await?;
+        let (strong_text, strong_verdict) = run_one(
+            provider,
+            strong_model,
+            work_dir,
+            verify_cmds,
+            task,
+            &mut trace,
+        )
+        .await?;
         (true, strong_verdict.passed, strong_text)
     };
 
@@ -112,7 +137,11 @@ pub async fn run_with_escalation(
     drop(trace); // flush
     let events = read_trace(trace_path)?;
     let (cheap_p, cheap_c) = sum_tokens(&events, cheap_model);
-    let (strong_p, strong_c) = if escalated { sum_tokens(&events, strong_model) } else { (0, 0) };
+    let (strong_p, strong_c) = if escalated {
+        sum_tokens(&events, strong_model)
+    } else {
+        (0, 0)
+    };
     let cheap_cost = estimate_cost(cheap_model, cheap_p, cheap_c);
     let strong_cost = estimate_cost(strong_model, strong_p, strong_c);
     let always_strong_cost = estimate_cost(strong_model, cheap_p + strong_p, cheap_c + strong_c);
@@ -144,16 +173,27 @@ mod tests {
         let provider = MockProvider::new();
 
         let report = run_with_escalation(
-            &provider, "claude-3-5-haiku-latest", "claude-sonnet-4-5",
-            &dir, &trace, &["false".to_string()], "do it",
-        ).await.unwrap();
+            &provider,
+            "claude-3-5-haiku-latest",
+            "claude-sonnet-4-5",
+            &dir,
+            &trace,
+            &["false".to_string()],
+            "do it",
+        )
+        .await
+        .unwrap();
 
         assert!(report.escalated, "should escalate when cheap fails");
         assert!(!report.passed, "verify=false never passes");
         // trace 里应有 RouteDecision 事件
         let events = read_trace(&trace).unwrap();
-        assert!(events.iter().any(|e| matches!(&e.kind, EventKind::RouteDecision { .. })),
-            "trace should record the escalation");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(&e.kind, EventKind::RouteDecision { .. })),
+            "trace should record the escalation"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -168,16 +208,30 @@ mod tests {
         let provider = MockProvider::new();
 
         let report = run_with_escalation(
-            &provider, "claude-3-5-haiku-latest", "claude-sonnet-4-5",
-            &dir, &trace, &["true".to_string()], "do it",
-        ).await.unwrap();
+            &provider,
+            "claude-3-5-haiku-latest",
+            "claude-sonnet-4-5",
+            &dir,
+            &trace,
+            &["true".to_string()],
+            "do it",
+        )
+        .await
+        .unwrap();
 
         assert!(!report.escalated, "should not escalate when cheap passes");
         assert!(report.passed);
-        assert_eq!(report.strong_cost, 0.0, "strong not used → zero strong cost");
+        assert_eq!(
+            report.strong_cost, 0.0,
+            "strong not used → zero strong cost"
+        );
         let events = read_trace(&trace).unwrap();
-        assert!(!events.iter().any(|e| matches!(&e.kind, EventKind::RouteDecision { .. })),
-            "no escalation event when cheap passes");
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(&e.kind, EventKind::RouteDecision { .. })),
+            "no escalation event when cheap passes"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

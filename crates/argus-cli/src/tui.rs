@@ -6,7 +6,9 @@ use anyhow::Result;
 use argus_trace::{read_trace, EventKind, TraceEvent};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::crossterm::execute;
-use ratatui::crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use ratatui::crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState};
 use ratatui::{backend::CrosstermBackend, Frame, Terminal};
@@ -20,7 +22,10 @@ pub struct App {
 
 impl App {
     pub fn new(events: Vec<TraceEvent>) -> Self {
-        Self { events, selected: 0 }
+        Self {
+            events,
+            selected: 0,
+        }
     }
     pub fn select_next(&mut self) {
         if !self.events.is_empty() && self.selected + 1 < self.events.len() {
@@ -59,10 +64,18 @@ pub fn event_detail(e: &TraceEvent) -> String {
     match &e.kind {
         EventKind::TaskStarted { task } => format!("TASK STARTED\n\n{task}"),
         EventKind::Thought { text } => format!("THOUGHT\n\n{text}"),
-        EventKind::ModelRequest { model, prompt_tokens } => {
+        EventKind::ModelRequest {
+            model,
+            prompt_tokens,
+        } => {
             format!("MODEL REQUEST\n\nmodel: {model}\nprompt tokens: {prompt_tokens}")
         }
-        EventKind::ModelResponse { model, prompt_tokens, completion_tokens, text } => {
+        EventKind::ModelResponse {
+            model,
+            prompt_tokens,
+            completion_tokens,
+            text,
+        } => {
             format!("MODEL RESPONSE\n\nmodel: {model}\ntokens: {prompt_tokens}+{completion_tokens}\n\n{text}")
         }
         EventKind::ToolCall { name, args } => format!("TOOL CALL\n\n{name}\n\nargs: {args}"),
@@ -73,7 +86,11 @@ pub fn event_detail(e: &TraceEvent) -> String {
         EventKind::VerificationGate { passed, detail } => {
             format!("VERIFICATION GATE\n\npassed: {passed}\n\n{detail}")
         }
-        EventKind::RouteDecision { from_model, to_model, reason } => {
+        EventKind::RouteDecision {
+            from_model,
+            to_model,
+            reason,
+        } => {
             format!("ROUTE DECISION\n\n{from_model} → {to_model}\n\n{reason}")
         }
         EventKind::Note { text } => format!("NOTE\n\n{text}"),
@@ -99,14 +116,21 @@ pub fn ui(f: &mut Frame, app: &App) {
         .split(outer[0]);
 
     // 左:选中 step 详情
-    let detail = app.selected_event().map(event_detail).unwrap_or_else(|| "(no event)".into());
+    let detail = app
+        .selected_event()
+        .map(event_detail)
+        .unwrap_or_else(|| "(no event)".into());
     let detail_widget = Paragraph::new(detail)
         .block(Block::default().borders(Borders::ALL).title("Detail"))
         .wrap(Wrap { trim: false });
     f.render_widget(detail_widget, panes[0]);
 
     // 右:时间线 List(高亮选中)
-    let items: Vec<ListItem> = app.events.iter().map(|e| ListItem::new(event_summary(e))).collect();
+    let items: Vec<ListItem> = app
+        .events
+        .iter()
+        .map(|e| ListItem::new(event_summary(e)))
+        .collect();
     let mut state = ListState::default();
     state.select(Some(app.selected));
     let list = List::new(items)
@@ -144,7 +168,10 @@ pub fn run_tui(path: &Path) -> Result<()> {
     result
 }
 
-fn event_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, app: &mut App) -> Result<()> {
+fn event_loop(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    app: &mut App,
+) -> Result<()> {
     loop {
         terminal.draw(|f| ui(f, app))?;
         if let Event::Key(key) = event::read()? {
@@ -168,9 +195,27 @@ mod tests {
 
     fn sample_events() -> Vec<TraceEvent> {
         vec![
-            TraceEvent { step: 0, ts_ms: 0, kind: EventKind::TaskStarted { task: "build X".into() } },
-            TraceEvent { step: 1, ts_ms: 0, kind: EventKind::Thought { text: "thinking".into() } },
-            TraceEvent { step: 2, ts_ms: 0, kind: EventKind::Note { text: "done".into() } },
+            TraceEvent {
+                step: 0,
+                ts_ms: 0,
+                kind: EventKind::TaskStarted {
+                    task: "build X".into(),
+                },
+            },
+            TraceEvent {
+                step: 1,
+                ts_ms: 0,
+                kind: EventKind::Thought {
+                    text: "thinking".into(),
+                },
+            },
+            TraceEvent {
+                step: 2,
+                ts_ms: 0,
+                kind: EventKind::Note {
+                    text: "done".into(),
+                },
+            },
         ]
     }
 
@@ -193,14 +238,29 @@ mod tests {
         app.select_next(); // 选中 step 1 (Thought "thinking")
         let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
         terminal.draw(|f| ui(f, &app)).unwrap();
-        let text: String = terminal.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
         // 右栏时间线
-        assert!(text.contains("Timeline"), "should have timeline pane: {text}");
+        assert!(
+            text.contains("Timeline"),
+            "should have timeline pane: {text}"
+        );
         assert!(text.contains("TASK"), "timeline should list events: {text}");
         // 左栏详情(选中 Thought)
         assert!(text.contains("Detail"), "should have detail pane: {text}");
-        assert!(text.contains("thinking"), "detail should show selected event content: {text}");
+        assert!(
+            text.contains("thinking"),
+            "detail should show selected event content: {text}"
+        );
         // 底部状态栏
-        assert!(text.contains("step 2/3"), "status bar should show position: {text}");
+        assert!(
+            text.contains("step 2/3"),
+            "status bar should show position: {text}"
+        );
     }
 }

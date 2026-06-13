@@ -2,15 +2,15 @@
 //!
 //! stdio transport:每条 JSON-RPC 2.0 消息一行(`\n` 分隔)。
 
-use anyhow::Result;
 use crate::tool::Tool;
+use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio::process::Child;
+use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
 
 /// 一个 MCP server 暴露的工具定义。
@@ -33,7 +33,12 @@ pub struct McpClient<R, W> {
 impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> McpClient<R, W> {
     /// 用给定读写端构造(不绑定子进程;spawn 会另行设置 child)。
     pub fn new(reader: R, writer: W) -> Self {
-        Self { reader: BufReader::new(reader), writer, next_id: 1, child: None }
+        Self {
+            reader: BufReader::new(reader),
+            writer,
+            next_id: 1,
+            child: None,
+        }
     }
 
     async fn send(&mut self, msg: &Value) -> Result<()> {
@@ -57,7 +62,8 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> McpClient<R, W> {
     async fn request(&mut self, method: &str, params: Value) -> Result<Value> {
         let id = self.next_id;
         self.next_id += 1;
-        self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})).await?;
+        self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))
+            .await?;
         loop {
             let msg = self.read_message().await?;
             if msg.get("id").and_then(|v| v.as_u64()) == Some(id) {
@@ -71,7 +77,8 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> McpClient<R, W> {
     }
 
     async fn notify(&mut self, method: &str, params: Value) -> Result<()> {
-        self.send(&json!({"jsonrpc": "2.0", "method": method, "params": params})).await
+        self.send(&json!({"jsonrpc": "2.0", "method": method, "params": params}))
+            .await
     }
 
     /// 握手:initialize 请求 + initialized 通知。
@@ -92,21 +99,42 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> McpClient<R, W> {
     /// 列出 server 的工具。
     pub async fn list_tools(&mut self) -> Result<Vec<McpToolDef>> {
         let result = self.request("tools/list", json!({})).await?;
-        let tools = result.get("tools").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let tools = result
+            .get("tools")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
         Ok(tools
             .into_iter()
             .map(|t| McpToolDef {
-                name: t.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                description: t.get("description").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-                input_schema: t.get("inputSchema").cloned().unwrap_or_else(|| json!({"type": "object"})),
+                name: t
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                description: t
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+                input_schema: t
+                    .get("inputSchema")
+                    .cloned()
+                    .unwrap_or_else(|| json!({"type": "object"})),
             })
             .collect())
     }
 
     /// 调用一个工具,返回拼接的文本内容。
     pub async fn call_tool(&mut self, name: &str, arguments: &Value) -> Result<String> {
-        let result = self.request("tools/call", json!({"name": name, "arguments": arguments})).await?;
-        let content = result.get("content").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+        let result = self
+            .request("tools/call", json!({"name": name, "arguments": arguments}))
+            .await?;
+        let content = result
+            .get("content")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
         let mut out = String::new();
         for block in content {
             if let Some(t) = block.get("text").and_then(|v| v.as_str()) {
@@ -239,7 +267,10 @@ mod tests {
             reader.read_line(&mut line).await.unwrap();
             let req: Value = serde_json::from_str(&line).unwrap();
             let id = req["id"].clone();
-            let msg = req["params"]["arguments"]["msg"].as_str().unwrap_or("").to_string();
+            let msg = req["params"]["arguments"]["msg"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
             let resp = json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":format!("echoed: {msg}")}]}});
             sw.write_all(format!("{resp}\n").as_bytes()).await.unwrap();
             sw.flush().await.unwrap();
@@ -249,7 +280,10 @@ mod tests {
         let tools = client.list_tools().await.unwrap();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name, "echo");
-        let out = client.call_tool("echo", &json!({"msg": "hi"})).await.unwrap();
+        let out = client
+            .call_tool("echo", &json!({"msg": "hi"}))
+            .await
+            .unwrap();
         assert_eq!(out, "echoed: hi");
         server.await.unwrap();
     }
@@ -268,7 +302,9 @@ mod tests {
             let req: Value = serde_json::from_str(&line).unwrap();
             let id = req["id"].clone();
             // 先发一条无关通知,再发真正的响应
-            sw.write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"log\",\"params\":{}}\n").await.unwrap();
+            sw.write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"log\",\"params\":{}}\n")
+                .await
+                .unwrap();
             let resp = json!({"jsonrpc":"2.0","id":id,"result":{"tools":[]}});
             sw.write_all(format!("{resp}\n").as_bytes()).await.unwrap();
             sw.flush().await.unwrap();

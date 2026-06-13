@@ -4,14 +4,24 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Role { System, User, Assistant }
+pub enum Role {
+    System,
+    User,
+    Assistant,
+}
 
 /// 一条消息里的内容块（支持文本与工具交互）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Content {
-    Text { text: String },
-    ToolUse { id: String, name: String, input: serde_json::Value },
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
     ToolResult {
         tool_use_id: String,
         content: String,
@@ -29,20 +39,33 @@ pub struct Message {
 
 impl Message {
     pub fn system(text: impl Into<String>) -> Self {
-        Self { role: Role::System, content: vec![Content::Text { text: text.into() }] }
+        Self {
+            role: Role::System,
+            content: vec![Content::Text { text: text.into() }],
+        }
     }
     pub fn user(text: impl Into<String>) -> Self {
-        Self { role: Role::User, content: vec![Content::Text { text: text.into() }] }
+        Self {
+            role: Role::User,
+            content: vec![Content::Text { text: text.into() }],
+        }
     }
     pub fn assistant(text: impl Into<String>) -> Self {
-        Self { role: Role::Assistant, content: vec![Content::Text { text: text.into() }] }
+        Self {
+            role: Role::Assistant,
+            content: vec![Content::Text { text: text.into() }],
+        }
     }
     /// 取该消息所有 Text 块拼接（用于估算/展示）。
     pub fn text(&self) -> String {
-        self.content.iter().filter_map(|c| match c {
-            Content::Text { text } => Some(text.as_str()),
-            _ => None,
-        }).collect::<Vec<_>>().join("")
+        self.content
+            .iter()
+            .filter_map(|c| match c {
+                Content::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("")
     }
 }
 
@@ -64,7 +87,11 @@ pub struct ToolCall {
 
 /// 模型停止原因。
 #[derive(Debug, Clone, PartialEq)]
-pub enum StopReason { EndTurn, ToolUse, Other }
+pub enum StopReason {
+    EndTurn,
+    ToolUse,
+    Other,
+}
 
 #[derive(Debug, Clone)]
 pub struct CompletionRequest {
@@ -74,7 +101,10 @@ pub struct CompletionRequest {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct Usage { pub prompt_tokens: u64, pub completion_tokens: u64 }
+pub struct Usage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompletionResponse {

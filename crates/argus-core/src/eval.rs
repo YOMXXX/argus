@@ -6,7 +6,7 @@ use crate::agent::Agent;
 use crate::approver::AutoApprover;
 use crate::provider::Provider;
 use crate::tool::{ReadFile, RunShell, WriteFile};
-use crate::verifier::{CommandVerifier, VerifyResult, Verifier};
+use crate::verifier::{CommandVerifier, Verifier, VerifyResult};
 use argus_trace::{EventKind, TraceWriter};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -101,7 +101,10 @@ pub async fn run_suite(
         };
         results.push(case_result);
     }
-    Ok(SuiteReport { suite_name: suite.name.clone(), results })
+    Ok(SuiteReport {
+        suite_name: suite.name.clone(),
+        results,
+    })
 }
 
 /// 跑单个 case:agent(带验证护栏自我修复)→ 独立裁决 verify。裁决结果也落 trace。
@@ -121,13 +124,18 @@ async fn run_one_case(
                 Box::new(RunShell::new(case_dir)),
             ])
             .with_approver(Box::new(AutoApprover))
-            .with_verifier(Box::new(CommandVerifier::new(case_dir, case.verify.clone())));
+            .with_verifier(Box::new(CommandVerifier::new(
+                case_dir,
+                case.verify.clone(),
+            )));
         // agent 自身带验证护栏会尝试修复;这里忽略其返回文本,裁决以独立 verify 为准。
         let _ = agent.run(&case.task).await?;
     } // agent drop,释放对 trace 的可变借用
 
     // 独立裁决:再 verify 一次作为 source of truth,并把结果落进该 case 的 trace。
-    let verdict = CommandVerifier::new(case_dir, case.verify.clone()).verify().await;
+    let verdict = CommandVerifier::new(case_dir, case.verify.clone())
+        .verify()
+        .await;
     trace.record(EventKind::VerificationGate {
         passed: verdict.passed,
         detail: verdict.detail.clone(),
@@ -155,8 +163,18 @@ mod tests {
         let report = SuiteReport {
             suite_name: "s".into(),
             results: vec![
-                CaseResult { id: "a".into(), passed: true, detail: "ok".into(), trace_path: "a.jsonl".into() },
-                CaseResult { id: "b".into(), passed: false, detail: "no".into(), trace_path: "b.jsonl".into() },
+                CaseResult {
+                    id: "a".into(),
+                    passed: true,
+                    detail: "ok".into(),
+                    trace_path: "a.jsonl".into(),
+                },
+                CaseResult {
+                    id: "b".into(),
+                    passed: false,
+                    detail: "no".into(),
+                    trace_path: "b.jsonl".into(),
+                },
             ],
         };
         assert_eq!(report.total(), 2);
@@ -167,7 +185,10 @@ mod tests {
 
     #[test]
     fn empty_report_rate_is_zero() {
-        let report = SuiteReport { suite_name: "s".into(), results: vec![] };
+        let report = SuiteReport {
+            suite_name: "s".into(),
+            results: vec![],
+        };
         assert_eq!(report.pass_rate(), 0.0);
         assert!(report.all_passed()); // 空集 all() == true
     }
@@ -184,12 +205,24 @@ mod tests {
         let suite = EvalSuite {
             name: "t".into(),
             cases: vec![
-                EvalCase { id: "ok".into(), task: "do it".into(), dir: None, verify: vec!["true".into()] },
-                EvalCase { id: "bad".into(), task: "do it".into(), dir: None, verify: vec!["false".into()] },
+                EvalCase {
+                    id: "ok".into(),
+                    task: "do it".into(),
+                    dir: None,
+                    verify: vec!["true".into()],
+                },
+                EvalCase {
+                    id: "bad".into(),
+                    task: "do it".into(),
+                    dir: None,
+                    verify: vec!["false".into()],
+                },
             ],
         };
         let provider = MockProvider::new();
-        let report = run_suite(&suite, &base, &provider, "m", &out).await.unwrap();
+        let report = run_suite(&suite, &base, &provider, "m", &out)
+            .await
+            .unwrap();
 
         assert_eq!(report.total(), 2);
         assert_eq!(report.passed_count(), 1);

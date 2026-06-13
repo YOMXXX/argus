@@ -17,7 +17,9 @@ pub struct MockProvider {
 
 impl MockProvider {
     pub fn new() -> Self {
-        Self { name: "mock".to_string() }
+        Self {
+            name: "mock".to_string(),
+        }
     }
 }
 
@@ -35,7 +37,9 @@ impl Provider for MockProvider {
 
     async fn complete(&self, req: &CompletionRequest) -> anyhow::Result<CompletionResponse> {
         let has_tool_result = req.messages.iter().any(|m| {
-            m.content.iter().any(|c| matches!(c, crate::types::Content::ToolResult { .. }))
+            m.content
+                .iter()
+                .any(|c| matches!(c, crate::types::Content::ToolResult { .. }))
         });
         // 取第一条 user 消息作为原始任务：跳过可能前置的 system 消息,也跳过多轮里的 ToolResult。
         let task_text = req
@@ -45,7 +49,11 @@ impl Provider for MockProvider {
             .map(|m| m.text())
             .unwrap_or_default();
         let usage = Usage {
-            prompt_tokens: req.messages.iter().map(|m| m.text().split_whitespace().count() as u64).sum(),
+            prompt_tokens: req
+                .messages
+                .iter()
+                .map(|m| m.text().split_whitespace().count() as u64)
+                .sum(),
             completion_tokens: 4,
         };
         if !req.tools.is_empty() && !has_tool_result {
@@ -57,13 +65,22 @@ impl Provider for MockProvider {
             };
             return Ok(CompletionResponse {
                 text: String::new(),
-                tool_calls: vec![crate::types::ToolCall { id: "mock-1".into(), name: tool.name.clone(), input }],
+                tool_calls: vec![crate::types::ToolCall {
+                    id: "mock-1".into(),
+                    name: tool.name.clone(),
+                    input,
+                }],
                 usage,
                 stop_reason: StopReason::ToolUse,
             });
         }
         let text = format!("[mock:{}] acknowledged task: {}", req.model, task_text);
-        Ok(CompletionResponse { text, tool_calls: vec![], usage, stop_reason: StopReason::EndTurn })
+        Ok(CompletionResponse {
+            text,
+            tool_calls: vec![],
+            usage,
+            stop_reason: StopReason::EndTurn,
+        })
     }
 }
 
@@ -91,7 +108,11 @@ mod tests {
     #[tokio::test]
     async fn mock_provider_handles_empty_messages() {
         let p = MockProvider::new();
-        let req = CompletionRequest { model: "x".into(), messages: vec![], tools: vec![] };
+        let req = CompletionRequest {
+            model: "x".into(),
+            messages: vec![],
+            tools: vec![],
+        };
         let resp = p.complete(&req).await.unwrap();
         assert!(resp.text.contains("mock:x"));
         assert!(resp.tool_calls.is_empty());
@@ -121,11 +142,22 @@ mod tests {
         let p = MockProvider::new();
         let req = CompletionRequest {
             model: "demo".into(),
-            messages: vec![Message::system("project rules here"), Message::user("build a thing")],
+            messages: vec![
+                Message::system("project rules here"),
+                Message::user("build a thing"),
+            ],
             tools: vec![],
         };
         let resp = p.complete(&req).await.unwrap();
-        assert!(resp.text.contains("build a thing"), "should use first user msg, got: {}", resp.text);
-        assert!(!resp.text.contains("project rules"), "should not echo system: {}", resp.text);
+        assert!(
+            resp.text.contains("build a thing"),
+            "should use first user msg, got: {}",
+            resp.text
+        );
+        assert!(
+            !resp.text.contains("project rules"),
+            "should not echo system: {}",
+            resp.text
+        );
     }
 }

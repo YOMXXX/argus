@@ -2,10 +2,12 @@ mod tui;
 
 use anyhow::Result;
 use argus_core::{
+    mcp_connect, run_suite, run_with_escalation, Approver, CommandVerifier, EvalSuite, Verifier,
+};
+use argus_core::{
     task_from_trace, Agent, AnthropicProvider, AutoApprover, MockProvider, OpenAiProvider,
     Provider, ReadFile, RunShell, WriteFile,
 };
-use argus_core::{run_suite, run_with_escalation, mcp_connect, Approver, CommandVerifier, EvalSuite, Verifier};
 use argus_trace::{read_trace, EventKind, TraceWriter};
 use clap::{Parser, Subcommand};
 use std::io::{BufRead, Write};
@@ -222,21 +224,68 @@ fn make_provider(provider: &str, base_url: Option<&str>) -> Result<Box<dyn Provi
 #[tokio::main]
 async fn main() -> Result<()> {
     match Cli::parse().command {
-        Commands::Run { task, model, trace, provider, yes, verify, base_url, rules, no_rules, mcp } => {
-            run(&provider, &task, &model, &trace, yes, &verify, base_url.as_deref(), rules.as_deref(), no_rules, mcp.as_deref()).await
+        Commands::Run {
+            task,
+            model,
+            trace,
+            provider,
+            yes,
+            verify,
+            base_url,
+            rules,
+            no_rules,
+            mcp,
+        } => {
+            run(
+                &provider,
+                &task,
+                &model,
+                &trace,
+                yes,
+                &verify,
+                base_url.as_deref(),
+                rules.as_deref(),
+                no_rules,
+                mcp.as_deref(),
+            )
+            .await
         }
         Commands::Trace { command } => match command {
             TraceCommands::Show { path } => trace_show(&path),
-            TraceCommands::Fork { path, provider, model, out } => {
-                trace_fork(&path, &provider, &model, out.as_deref()).await
-            }
+            TraceCommands::Fork {
+                path,
+                provider,
+                model,
+                out,
+            } => trace_fork(&path, &provider, &model, out.as_deref()).await,
             TraceCommands::Diff { a, b } => trace_diff(&a, &b),
         },
-        Commands::Eval { suite, provider, model, out_dir, base_url } => {
-            eval_run(&suite, &provider, &model, &out_dir, base_url.as_deref()).await
-        }
-        Commands::Route { task, cheap, strong, verify, provider, trace, base_url } => {
-            route_run(&task, &cheap, &strong, &verify, &provider, &trace, base_url.as_deref()).await
+        Commands::Eval {
+            suite,
+            provider,
+            model,
+            out_dir,
+            base_url,
+        } => eval_run(&suite, &provider, &model, &out_dir, base_url.as_deref()).await,
+        Commands::Route {
+            task,
+            cheap,
+            strong,
+            verify,
+            provider,
+            trace,
+            base_url,
+        } => {
+            route_run(
+                &task,
+                &cheap,
+                &strong,
+                &verify,
+                &provider,
+                &trace,
+                base_url.as_deref(),
+            )
+            .await
         }
         Commands::McpMock => mcp_mock().await,
         Commands::McpServe => mcp_serve().await,
@@ -245,7 +294,17 @@ async fn main() -> Result<()> {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path, yes: bool, verify: &[String], base_url: Option<&str>, system: Option<String>, mcp: Option<&str>) -> Result<String> {
+async fn run_agent(
+    provider: &str,
+    model: &str,
+    task: &str,
+    trace_path: &Path,
+    yes: bool,
+    verify: &[String],
+    base_url: Option<&str>,
+    system: Option<String>,
+    mcp: Option<&str>,
+) -> Result<String> {
     if let Some(parent) = trace_path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
@@ -257,17 +316,28 @@ async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path, y
         eprintln!("warning: --model is 'mock'; pass a real model (e.g. --model claude-sonnet-4-5 or gpt-4o-mini)");
     }
     let make_approver = || -> Box<dyn Approver> {
-        if yes { Box::new(AutoApprover) } else { Box::new(StdinApprover) }
+        if yes {
+            Box::new(AutoApprover)
+        } else {
+            Box::new(StdinApprover)
+        }
     };
     let make_verifier = || -> Option<Box<dyn Verifier>> {
-        if verify.is_empty() { None } else { Some(Box::new(CommandVerifier::new(".", verify.to_vec()))) }
+        if verify.is_empty() {
+            None
+        } else {
+            Some(Box::new(CommandVerifier::new(".", verify.to_vec())))
+        }
     };
     let mut tools: Vec<Box<dyn argus_core::Tool>> = Vec::new();
     if let Some(cmd) = mcp {
         let mut parts = cmd.split_whitespace();
-        let program = parts.next().ok_or_else(|| anyhow::anyhow!("--mcp needs a command"))?;
+        let program = parts
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("--mcp needs a command"))?;
         let mcp_args: Vec<String> = parts.map(|s| s.to_string()).collect();
-        let mcp_tools = mcp_connect(program, &mcp_args).await
+        let mcp_tools = mcp_connect(program, &mcp_args)
+            .await
             .map_err(|e| anyhow::anyhow!("failed to connect MCP server: {e}"))?;
         eprintln!("(connected MCP server: {} tool(s))", mcp_tools.len());
         tools.extend(mcp_tools);
@@ -288,9 +358,23 @@ async fn run_agent(provider: &str, model: &str, task: &str, trace_path: &Path, y
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run(provider: &str, task: &str, model: &str, trace_path: &Path, yes: bool, verify: &[String], base_url: Option<&str>, rules: Option<&Path>, no_rules: bool, mcp: Option<&str>) -> Result<()> {
+async fn run(
+    provider: &str,
+    task: &str,
+    model: &str,
+    trace_path: &Path,
+    yes: bool,
+    verify: &[String],
+    base_url: Option<&str>,
+    rules: Option<&Path>,
+    no_rules: bool,
+    mcp: Option<&str>,
+) -> Result<()> {
     let system = resolve_rules(rules, no_rules)?;
-    let output = run_agent(provider, model, task, trace_path, yes, verify, base_url, system, mcp).await?;
+    let output = run_agent(
+        provider, model, task, trace_path, yes, verify, base_url, system, mcp,
+    )
+    .await?;
     println!("{output}");
     eprintln!("(trace written to {})", trace_path.display());
     Ok(())
@@ -308,7 +392,18 @@ async fn trace_fork(src: &Path, provider: &str, model: &str, out: Option<&Path>)
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| src.with_extension("fork.jsonl"));
     eprintln!("forking task from {}: {task:?}", src.display());
-    let output = run_agent(provider, model, &task, &out_path, true, &[], None, None, None).await?;
+    let output = run_agent(
+        provider,
+        model,
+        &task,
+        &out_path,
+        true,
+        &[],
+        None,
+        None,
+        None,
+    )
+    .await?;
     println!("{output}");
     eprintln!("(forked trace written to {})", out_path.display());
     Ok(())
@@ -318,10 +413,18 @@ fn summarize(kind: &EventKind) -> String {
     match kind {
         EventKind::TaskStarted { task } => format!("TASK     {task}"),
         EventKind::Thought { text } => format!("THOUGHT  {text}"),
-        EventKind::ModelRequest { model, prompt_tokens } => {
+        EventKind::ModelRequest {
+            model,
+            prompt_tokens,
+        } => {
             format!("MODEL ->  {model} ({prompt_tokens} prompt tokens)")
         }
-        EventKind::ModelResponse { model, prompt_tokens, completion_tokens, text } => {
+        EventKind::ModelResponse {
+            model,
+            prompt_tokens,
+            completion_tokens,
+            text,
+        } => {
             format!("MODEL <-  {model} ({prompt_tokens}+{completion_tokens} tokens): {text}")
         }
         EventKind::ToolCall { name, args } => format!("TOOL ->   {name}({args})"),
@@ -332,7 +435,11 @@ fn summarize(kind: &EventKind) -> String {
         EventKind::VerificationGate { passed, detail } => {
             format!("GATE     passed={passed}: {detail}")
         }
-        EventKind::RouteDecision { from_model, to_model, reason } => {
+        EventKind::RouteDecision {
+            from_model,
+            to_model,
+            reason,
+        } => {
             format!("ROUTE    {from_model} → {to_model}: {reason}")
         }
         EventKind::Note { text } => format!("NOTE     {text}"),
@@ -357,8 +464,14 @@ fn trace_diff(a_path: &Path, b_path: &Path) -> Result<()> {
     let n = a.len().max(b.len());
     println!("step | A: {} | B: {}", a_path.display(), b_path.display());
     for i in 0..n {
-        let la = a.get(i).map(|e| summarize(&e.kind)).unwrap_or_else(|| "—".into());
-        let lb = b.get(i).map(|e| summarize(&e.kind)).unwrap_or_else(|| "—".into());
+        let la = a
+            .get(i)
+            .map(|e| summarize(&e.kind))
+            .unwrap_or_else(|| "—".into());
+        let lb = b
+            .get(i)
+            .map(|e| summarize(&e.kind))
+            .unwrap_or_else(|| "—".into());
         let mark = if la == lb { " " } else { "≠" };
         println!("[{i:>3}] {mark} A: {la}");
         println!("      {mark} B: {lb}");
@@ -366,7 +479,13 @@ fn trace_diff(a_path: &Path, b_path: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn eval_run(suite_path: &Path, provider: &str, model: &str, out_dir: &Path, base_url: Option<&str>) -> Result<()> {
+async fn eval_run(
+    suite_path: &Path,
+    provider: &str,
+    model: &str,
+    out_dir: &Path,
+    base_url: Option<&str>,
+) -> Result<()> {
     let text = std::fs::read_to_string(suite_path)
         .map_err(|e| anyhow::anyhow!("failed to read suite {}: {e}", suite_path.display()))?;
     let suite: EvalSuite = serde_json::from_str(&text)
@@ -386,7 +505,12 @@ async fn eval_run(suite_path: &Path, provider: &str, model: &str, out_dir: &Path
         println!("[{tag}] {}  → {}", r.id, r.trace_path.display());
     }
     let pct = (report.pass_rate() * 100.0).round() as u64;
-    println!("{}/{} passed ({}%)", report.passed_count(), report.total(), pct);
+    println!(
+        "{}/{} passed ({}%)",
+        report.passed_count(),
+        report.total(),
+        pct
+    );
 
     // CI gate:有 case 失败 → 退出码非 0(trace 已在 run_suite 内写完并 flush)。
     if !report.all_passed() {
@@ -410,7 +534,8 @@ async fn route_run(
     let work_dir = Path::new(".");
 
     let p = make_provider(provider, base_url)?;
-    let report = run_with_escalation(&*p, cheap, strong, work_dir, trace_path, verify, task).await?;
+    let report =
+        run_with_escalation(&*p, cheap, strong, work_dir, trace_path, verify, task).await?;
 
     println!("{}", report.final_text);
     let status = if report.passed { "passed" } else { "failed" };
@@ -475,9 +600,15 @@ async fn mcp_serve() -> Result<()> {
                 }]}
             })),
             "tools/call" => {
-                let params = msg.get("params").cloned().unwrap_or(serde_json::Value::Null);
+                let params = msg
+                    .get("params")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
                 let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let args = params.get("arguments").cloned().unwrap_or(serde_json::Value::Null);
+                let args = params
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
                 let call = mcp_serve_tool(name, &args).await;
                 Some(match call {
                     Ok(text) => serde_json::json!({
@@ -507,7 +638,11 @@ async fn mcp_serve_tool(name: &str, args: &serde_json::Value) -> Result<String> 
             let commands: Vec<String> = args
                 .get("commands")
                 .and_then(|v| v.as_array())
-                .map(|a| a.iter().filter_map(|c| c.as_str().map(String::from)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|c| c.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
             if commands.is_empty() {
                 anyhow::bail!("verify: 'commands' is required and must be non-empty");

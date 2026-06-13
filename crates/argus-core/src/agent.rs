@@ -21,7 +21,11 @@ pub struct Agent<'a> {
 }
 
 impl<'a> Agent<'a> {
-    pub fn new(provider: &'a dyn Provider, model: impl Into<String>, trace: &'a mut TraceWriter) -> Self {
+    pub fn new(
+        provider: &'a dyn Provider,
+        model: impl Into<String>,
+        trace: &'a mut TraceWriter,
+    ) -> Self {
         Self {
             provider,
             model: model.into(),
@@ -57,17 +61,24 @@ impl<'a> Agent<'a> {
     }
 
     fn tool_specs(&self) -> Vec<ToolSpec> {
-        self.tools.iter().map(|t| ToolSpec {
-            name: t.name().to_string(),
-            description: t.description().to_string(),
-            input_schema: t.input_schema(),
-        }).collect()
+        self.tools
+            .iter()
+            .map(|t| ToolSpec {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+                input_schema: t.input_schema(),
+            })
+            .collect()
     }
 
     /// 运行一次任务，多轮调用工具直到完成，返回最终文本；全过程写入 Trace。
     pub async fn run(&mut self, task: &str) -> anyhow::Result<String> {
-        self.trace.record(EventKind::TaskStarted { task: task.to_string() })?;
-        self.trace.record(EventKind::Thought { text: format!("Received task: {task}") })?;
+        self.trace.record(EventKind::TaskStarted {
+            task: task.to_string(),
+        })?;
+        self.trace.record(EventKind::Thought {
+            text: format!("Received task: {task}"),
+        })?;
 
         let mut messages = Vec::new();
         if let Some(system) = &self.system {
@@ -78,9 +89,14 @@ impl<'a> Agent<'a> {
         let specs = self.tool_specs();
 
         for _turn in 0..self.max_turns {
-            let prompt_tokens: u64 = messages.iter()
-                .map(|m| m.text().split_whitespace().count() as u64).sum();
-            self.trace.record(EventKind::ModelRequest { model: self.model.clone(), prompt_tokens })?;
+            let prompt_tokens: u64 = messages
+                .iter()
+                .map(|m| m.text().split_whitespace().count() as u64)
+                .sum();
+            self.trace.record(EventKind::ModelRequest {
+                model: self.model.clone(),
+                prompt_tokens,
+            })?;
 
             let req = CompletionRequest {
                 model: self.model.clone(),
@@ -101,7 +117,10 @@ impl<'a> Agent<'a> {
                     None => return Ok(resp.text),
                     Some(verifier) => {
                         let vr = verifier.verify().await;
-                        self.trace.record(EventKind::VerificationGate { passed: vr.passed, detail: vr.detail.clone() })?;
+                        self.trace.record(EventKind::VerificationGate {
+                            passed: vr.passed,
+                            detail: vr.detail.clone(),
+                        })?;
                         if vr.passed {
                             return Ok(resp.text);
                         }
@@ -113,7 +132,12 @@ impl<'a> Agent<'a> {
                             ));
                         }
                         if !resp.text.is_empty() {
-                            messages.push(Message { role: Role::Assistant, content: vec![Content::Text { text: resp.text.clone() }] });
+                            messages.push(Message {
+                                role: Role::Assistant,
+                                content: vec![Content::Text {
+                                    text: resp.text.clone(),
+                                }],
+                            });
                         }
                         messages.push(Message::user(format!(
                             "Verification failed. Fix the issues and continue.\n{}",
@@ -127,7 +151,9 @@ impl<'a> Agent<'a> {
             // 记录 assistant 的 text + tool_use 到历史
             let mut assistant_blocks = Vec::new();
             if !resp.text.is_empty() {
-                assistant_blocks.push(Content::Text { text: resp.text.clone() });
+                assistant_blocks.push(Content::Text {
+                    text: resp.text.clone(),
+                });
             }
             for call in &resp.tool_calls {
                 assistant_blocks.push(Content::ToolUse {
@@ -136,12 +162,18 @@ impl<'a> Agent<'a> {
                     input: call.input.clone(),
                 });
             }
-            messages.push(Message { role: Role::Assistant, content: assistant_blocks });
+            messages.push(Message {
+                role: Role::Assistant,
+                content: assistant_blocks,
+            });
 
             // 执行工具，收集 tool_result
             let mut result_blocks = Vec::new();
             for call in &resp.tool_calls {
-                self.trace.record(EventKind::ToolCall { name: call.name.clone(), args: call.input.to_string() })?;
+                self.trace.record(EventKind::ToolCall {
+                    name: call.name.clone(),
+                    args: call.input.to_string(),
+                })?;
                 let tool = self.tools.iter().find(|t| t.name() == call.name);
                 let (output, is_error) = match tool {
                     Some(tool) if tool.requires_approval() => {
@@ -164,10 +196,21 @@ impl<'a> Agent<'a> {
                     },
                     None => (format!("error: unknown tool '{}'", call.name), true),
                 };
-                self.trace.record(EventKind::ToolResult { name: call.name.clone(), ok: !is_error, output: output.clone() })?;
-                result_blocks.push(Content::ToolResult { tool_use_id: call.id.clone(), content: output, is_error });
+                self.trace.record(EventKind::ToolResult {
+                    name: call.name.clone(),
+                    ok: !is_error,
+                    output: output.clone(),
+                })?;
+                result_blocks.push(Content::ToolResult {
+                    tool_use_id: call.id.clone(),
+                    content: output,
+                    is_error,
+                });
             }
-            messages.push(Message { role: Role::User, content: result_blocks });
+            messages.push(Message {
+                role: Role::User,
+                content: result_blocks,
+            });
         }
         anyhow::bail!("max turns ({}) exceeded", self.max_turns)
     }
@@ -179,13 +222,17 @@ mod tests {
     use crate::approver::AutoApprover;
     use crate::provider::{MockProvider, Provider};
     use crate::types::{CompletionRequest, CompletionResponse, StopReason, ToolCall, Usage};
-    use crate::verifier::{VerifyResult, Verifier};
+    use crate::verifier::{Verifier, VerifyResult};
     use argus_trace::{read_trace, EventKind, TraceWriter};
     use async_trait::async_trait;
 
     fn tmp_path(tag: &str) -> std::path::PathBuf {
         let mut p = std::env::temp_dir();
-        p.push(format!("argus-core-test-{}-{}.jsonl", std::process::id(), tag));
+        p.push(format!(
+            "argus-core-test-{}-{}.jsonl",
+            std::process::id(),
+            tag
+        ));
         let _ = std::fs::remove_file(&p);
         p
     }
@@ -226,9 +273,16 @@ mod tests {
             assert!(out.contains("acknowledged") || out.contains("done"));
         }
         let events = read_trace(&path).unwrap();
-        assert!(events.iter().any(|e| matches!(e.kind, EventKind::ToolCall { .. })));
-        assert!(events.iter().any(|e| matches!(e.kind, EventKind::ToolResult { ok: true, .. })));
-        assert!(dir.join("mock.txt").exists(), "tool should have written mock.txt");
+        assert!(events
+            .iter()
+            .any(|e| matches!(e.kind, EventKind::ToolCall { .. })));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e.kind, EventKind::ToolResult { ok: true, .. })));
+        assert!(
+            dir.join("mock.txt").exists(),
+            "tool should have written mock.txt"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -236,18 +290,37 @@ mod tests {
     struct ShellOnceProvider;
     #[async_trait]
     impl Provider for ShellOnceProvider {
-        fn name(&self) -> &str { "shell-once" }
+        fn name(&self) -> &str {
+            "shell-once"
+        }
         async fn complete(&self, req: &CompletionRequest) -> anyhow::Result<CompletionResponse> {
-            let has_result = req.messages.iter().any(|m| m.content.iter().any(|c| matches!(c, Content::ToolResult { .. })));
-            let usage = Usage { prompt_tokens: 1, completion_tokens: 1 };
+            let has_result = req.messages.iter().any(|m| {
+                m.content
+                    .iter()
+                    .any(|c| matches!(c, Content::ToolResult { .. }))
+            });
+            let usage = Usage {
+                prompt_tokens: 1,
+                completion_tokens: 1,
+            };
             if !has_result {
                 return Ok(CompletionResponse {
                     text: String::new(),
-                    tool_calls: vec![ToolCall { id: "s1".into(), name: "run_shell".into(), input: serde_json::json!({"command":"echo hi-shell"}) }],
-                    usage, stop_reason: StopReason::ToolUse,
+                    tool_calls: vec![ToolCall {
+                        id: "s1".into(),
+                        name: "run_shell".into(),
+                        input: serde_json::json!({"command":"echo hi-shell"}),
+                    }],
+                    usage,
+                    stop_reason: StopReason::ToolUse,
                 });
             }
-            Ok(CompletionResponse { text: "done".into(), tool_calls: vec![], usage, stop_reason: StopReason::EndTurn })
+            Ok(CompletionResponse {
+                text: "done".into(),
+                tool_calls: vec![],
+                usage,
+                stop_reason: StopReason::EndTurn,
+            })
         }
     }
 
@@ -292,21 +365,42 @@ mod tests {
     struct PassVerifier;
     #[async_trait]
     impl Verifier for PassVerifier {
-        async fn verify(&self) -> VerifyResult { VerifyResult { passed: true, detail: "ok".into() } }
+        async fn verify(&self) -> VerifyResult {
+            VerifyResult {
+                passed: true,
+                detail: "ok".into(),
+            }
+        }
     }
     struct AlwaysFailVerifier;
     #[async_trait]
     impl Verifier for AlwaysFailVerifier {
-        async fn verify(&self) -> VerifyResult { VerifyResult { passed: false, detail: "nope".into() } }
+        async fn verify(&self) -> VerifyResult {
+            VerifyResult {
+                passed: false,
+                detail: "nope".into(),
+            }
+        }
     }
-    struct FailThenPassVerifier { calls: std::sync::Mutex<u32> }
+    struct FailThenPassVerifier {
+        calls: std::sync::Mutex<u32>,
+    }
     #[async_trait]
     impl Verifier for FailThenPassVerifier {
         async fn verify(&self) -> VerifyResult {
             let mut c = self.calls.lock().unwrap();
             *c += 1;
-            if *c == 1 { VerifyResult { passed: false, detail: "first fail".into() } }
-            else { VerifyResult { passed: true, detail: "ok".into() } }
+            if *c == 1 {
+                VerifyResult {
+                    passed: false,
+                    detail: "first fail".into(),
+                }
+            } else {
+                VerifyResult {
+                    passed: true,
+                    detail: "ok".into(),
+                }
+            }
         }
     }
 
@@ -316,12 +410,15 @@ mod tests {
         let provider = MockProvider::new();
         {
             let mut trace = TraceWriter::create(&path).unwrap();
-            let mut agent = Agent::new(&provider, "m", &mut trace).with_verifier(Box::new(PassVerifier));
+            let mut agent =
+                Agent::new(&provider, "m", &mut trace).with_verifier(Box::new(PassVerifier));
             let out = agent.run("do it").await.unwrap();
             assert!(out.contains("acknowledged"));
         }
         let events = read_trace(&path).unwrap();
-        assert!(events.iter().any(|e| matches!(&e.kind, EventKind::VerificationGate { passed: true, .. })));
+        assert!(events
+            .iter()
+            .any(|e| matches!(&e.kind, EventKind::VerificationGate { passed: true, .. })));
         let _ = std::fs::remove_file(&path);
     }
 
@@ -331,13 +428,20 @@ mod tests {
         let provider = MockProvider::new();
         {
             let mut trace = TraceWriter::create(&path).unwrap();
-            let mut agent = Agent::new(&provider, "m", &mut trace)
-                .with_verifier(Box::new(FailThenPassVerifier { calls: std::sync::Mutex::new(0) }));
+            let mut agent = Agent::new(&provider, "m", &mut trace).with_verifier(Box::new(
+                FailThenPassVerifier {
+                    calls: std::sync::Mutex::new(0),
+                },
+            ));
             let _ = agent.run("do it").await.unwrap();
         }
         let events = read_trace(&path).unwrap();
-        assert!(events.iter().any(|e| matches!(&e.kind, EventKind::VerificationGate { passed: false, .. })));
-        assert!(events.iter().any(|e| matches!(&e.kind, EventKind::VerificationGate { passed: true, .. })));
+        assert!(events
+            .iter()
+            .any(|e| matches!(&e.kind, EventKind::VerificationGate { passed: false, .. })));
+        assert!(events
+            .iter()
+            .any(|e| matches!(&e.kind, EventKind::VerificationGate { passed: true, .. })));
         let _ = std::fs::remove_file(&path);
     }
 
@@ -347,12 +451,16 @@ mod tests {
         let provider = MockProvider::new();
         {
             let mut trace = TraceWriter::create(&path).unwrap();
-            let mut agent = Agent::new(&provider, "m", &mut trace).with_verifier(Box::new(AlwaysFailVerifier));
+            let mut agent =
+                Agent::new(&provider, "m", &mut trace).with_verifier(Box::new(AlwaysFailVerifier));
             let out = agent.run("do it").await.unwrap();
             assert!(out.contains("still failing"), "out: {out}");
         }
         let events = read_trace(&path).unwrap();
-        let fails = events.iter().filter(|e| matches!(&e.kind, EventKind::VerificationGate { passed: false, .. })).count();
+        let fails = events
+            .iter()
+            .filter(|e| matches!(&e.kind, EventKind::VerificationGate { passed: false, .. }))
+            .count();
         assert_eq!(fails, 3, "should verify max_verify_attempts(3) times");
         let _ = std::fs::remove_file(&path);
     }
@@ -362,16 +470,23 @@ mod tests {
     }
     #[async_trait]
     impl Provider for CaptureSystemProvider {
-        fn name(&self) -> &str { "capture" }
+        fn name(&self) -> &str {
+            "capture"
+        }
         async fn complete(&self, req: &CompletionRequest) -> anyhow::Result<CompletionResponse> {
-            let sys = req.messages.iter()
+            let sys = req
+                .messages
+                .iter()
                 .find(|m| matches!(m.role, Role::System))
                 .map(|m| m.text());
             *self.saw_system.lock().unwrap() = sys;
             Ok(CompletionResponse {
                 text: "ok".into(),
                 tool_calls: vec![],
-                usage: Usage { prompt_tokens: 1, completion_tokens: 1 },
+                usage: Usage {
+                    prompt_tokens: 1,
+                    completion_tokens: 1,
+                },
                 stop_reason: StopReason::EndTurn,
             })
         }
@@ -380,7 +495,9 @@ mod tests {
     #[tokio::test]
     async fn with_system_injects_system_message() {
         let path = tmp_path("system");
-        let provider = CaptureSystemProvider { saw_system: std::sync::Mutex::new(None) };
+        let provider = CaptureSystemProvider {
+            saw_system: std::sync::Mutex::new(None),
+        };
         {
             let mut trace = TraceWriter::create(&path).unwrap();
             let mut agent = Agent::new(&provider, "m", &mut trace).with_system("always be terse");
@@ -394,7 +511,9 @@ mod tests {
     #[tokio::test]
     async fn without_system_no_system_message() {
         let path = tmp_path("nosystem");
-        let provider = CaptureSystemProvider { saw_system: std::sync::Mutex::new(None) };
+        let provider = CaptureSystemProvider {
+            saw_system: std::sync::Mutex::new(None),
+        };
         {
             let mut trace = TraceWriter::create(&path).unwrap();
             let mut agent = Agent::new(&provider, "m", &mut trace);

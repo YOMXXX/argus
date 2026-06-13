@@ -1,7 +1,9 @@
 //! OpenAI 兼容 Chat Completions API provider(OpenAI / OpenRouter / 本地 Ollama 等)。
 
 use crate::provider::Provider;
-use crate::types::{CompletionRequest, CompletionResponse, Content, Role, StopReason, ToolCall, Usage};
+use crate::types::{
+    CompletionRequest, CompletionResponse, Content, Role, StopReason, ToolCall, Usage,
+};
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -75,7 +77,11 @@ fn to_openai_body(req: &CompletionRequest) -> Value {
                     "type": "function",
                     "function": {"name": name, "arguments": input.to_string()}
                 })),
-                Content::ToolResult { tool_use_id, content, .. } => {
+                Content::ToolResult {
+                    tool_use_id,
+                    content,
+                    ..
+                } => {
                     had_tool_result = true;
                     messages.push(json!({
                         "role": "tool",
@@ -94,7 +100,11 @@ fn to_openai_body(req: &CompletionRequest) -> Value {
         if tool_calls.is_empty() {
             msg["content"] = json!(text);
         } else {
-            msg["content"] = if text.is_empty() { Value::Null } else { json!(text) };
+            msg["content"] = if text.is_empty() {
+                Value::Null
+            } else {
+                json!(text)
+            };
             msg["tool_calls"] = json!(tool_calls);
         }
         messages.push(msg);
@@ -132,7 +142,9 @@ impl OpenAiProvider {
 
 #[async_trait]
 impl Provider for OpenAiProvider {
-    fn name(&self) -> &str { "openai" }
+    fn name(&self) -> &str {
+        "openai"
+    }
 
     async fn complete(&self, req: &CompletionRequest) -> anyhow::Result<CompletionResponse> {
         let body = to_openai_body(req);
@@ -159,8 +171,13 @@ impl Provider for OpenAiProvider {
         let mut tool_calls = Vec::new();
         if let Some(tcs) = choice.message.tool_calls {
             for tc in tcs {
-                let input = serde_json::from_str(&tc.function.arguments).unwrap_or_else(|_| json!({}));
-                tool_calls.push(ToolCall { id: tc.id, name: tc.function.name, input });
+                let input =
+                    serde_json::from_str(&tc.function.arguments).unwrap_or_else(|_| json!({}));
+                tool_calls.push(ToolCall {
+                    id: tc.id,
+                    name: tc.function.name,
+                    input,
+                });
             }
         }
         let stop_reason = match choice.finish_reason.as_deref() {
@@ -192,7 +209,11 @@ mod tests {
         let req = CompletionRequest {
             model: "gpt-4o-mini".into(),
             messages: vec![Message::system("be terse"), Message::user("hi")],
-            tools: vec![ToolSpec { name: "read_file".into(), description: "r".into(), input_schema: json!({"type":"object"}) }],
+            tools: vec![ToolSpec {
+                name: "read_file".into(),
+                description: "r".into(),
+                input_schema: json!({"type":"object"}),
+            }],
         };
         let body = to_openai_body(&req);
         assert_eq!(body["messages"][0]["role"], json!("system"));
@@ -208,13 +229,27 @@ mod tests {
         let req = CompletionRequest {
             model: "m".into(),
             messages: vec![
-                Message { role: Role::Assistant, content: vec![
-                    Content::Text { text: "calling".into() },
-                    Content::ToolUse { id: "tc1".into(), name: "read_file".into(), input: json!({"path":"a.txt"}) },
-                ] },
-                Message { role: Role::User, content: vec![
-                    Content::ToolResult { tool_use_id: "tc1".into(), content: "file body".into(), is_error: false },
-                ] },
+                Message {
+                    role: Role::Assistant,
+                    content: vec![
+                        Content::Text {
+                            text: "calling".into(),
+                        },
+                        Content::ToolUse {
+                            id: "tc1".into(),
+                            name: "read_file".into(),
+                            input: json!({"path":"a.txt"}),
+                        },
+                    ],
+                },
+                Message {
+                    role: Role::User,
+                    content: vec![Content::ToolResult {
+                        tool_use_id: "tc1".into(),
+                        content: "file body".into(),
+                        is_error: false,
+                    }],
+                },
             ],
             tools: vec![],
         };
@@ -222,9 +257,17 @@ mod tests {
         // assistant 消息带 tool_calls
         assert_eq!(body["messages"][0]["role"], json!("assistant"));
         assert_eq!(body["messages"][0]["tool_calls"][0]["id"], json!("tc1"));
-        assert_eq!(body["messages"][0]["tool_calls"][0]["function"]["name"], json!("read_file"));
-        let args = body["messages"][0]["tool_calls"][0]["function"]["arguments"].as_str().unwrap();
-        assert!(args.contains("a.txt"), "arguments should be JSON string: {args}");
+        assert_eq!(
+            body["messages"][0]["tool_calls"][0]["function"]["name"],
+            json!("read_file")
+        );
+        let args = body["messages"][0]["tool_calls"][0]["function"]["arguments"]
+            .as_str()
+            .unwrap();
+        assert!(
+            args.contains("a.txt"),
+            "arguments should be JSON string: {args}"
+        );
         // tool result 作为独立 role:"tool" 消息
         assert_eq!(body["messages"][1]["role"], json!("tool"));
         assert_eq!(body["messages"][1]["tool_call_id"], json!("tc1"));
@@ -234,13 +277,20 @@ mod tests {
     #[tokio::test]
     async fn complete_parses_text_stop() {
         let server = MockServer::start().await;
-        Mock::given(method("POST")).and(path("/chat/completions"))
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "choices": [{"message": {"content": "hello"}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 5, "completion_tokens": 2}
-            }))).mount(&server).await;
+            })))
+            .mount(&server)
+            .await;
         let p = OpenAiProvider::with_base_url("k", server.uri());
-        let req = CompletionRequest { model: "m".into(), messages: vec![Message::user("hi")], tools: vec![] };
+        let req = CompletionRequest {
+            model: "m".into(),
+            messages: vec![Message::user("hi")],
+            tools: vec![],
+        };
         let resp = p.complete(&req).await.unwrap();
         assert_eq!(resp.text, "hello");
         assert!(resp.tool_calls.is_empty());
@@ -263,7 +313,11 @@ mod tests {
         let req = CompletionRequest {
             model: "m".into(),
             messages: vec![Message::user("read a.txt")],
-            tools: vec![ToolSpec { name: "read_file".into(), description: "r".into(), input_schema: json!({}) }],
+            tools: vec![ToolSpec {
+                name: "read_file".into(),
+                description: "r".into(),
+                input_schema: json!({}),
+            }],
         };
         let resp = p.complete(&req).await.unwrap();
         assert_eq!(resp.stop_reason, StopReason::ToolUse);
@@ -276,12 +330,19 @@ mod tests {
     #[tokio::test]
     async fn complete_surfaces_api_error_body() {
         let server = MockServer::start().await;
-        Mock::given(method("POST")).and(path("/chat/completions"))
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
             .respond_with(ResponseTemplate::new(401).set_body_json(json!({
                 "error": {"message": "invalid api key"}
-            }))).mount(&server).await;
+            })))
+            .mount(&server)
+            .await;
         let p = OpenAiProvider::with_base_url("k", server.uri());
-        let req = CompletionRequest { model: "m".into(), messages: vec![Message::user("hi")], tools: vec![] };
+        let req = CompletionRequest {
+            model: "m".into(),
+            messages: vec![Message::user("hi")],
+            tools: vec![],
+        };
         let err = p.complete(&req).await.unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("401"), "err: {msg}");
