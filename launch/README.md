@@ -17,6 +17,7 @@ Primary proof:
 - `arguscode` opens the daily Workbench TUI.
 - `arguscode init` detects the project, imports rules, and creates memory/config/evals.
 - `arguscode task` queues work locally and `arguscode resume` picks up the latest queued task.
+- Tasks typed directly in the Workbench persist to `.argus/tasks/queue.jsonl`.
 - `argus demo` shows the verification gate catching a bad result and forcing a fix.
 - `argus trace show` exposes the black-box timeline.
 - `argus mcp-serve` gives existing agents a verification tool without switching workflows.

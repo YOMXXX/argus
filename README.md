@@ -116,6 +116,7 @@ ArgusCode ships a built-in **mock provider**, so you can see the workbench and t
 ```bash
 # The daily entrypoint: initialize the current repo and open the TUI.
 arguscode
+# Inside the TUI, type a task and press Enter to persist it to the local queue.
 
 # Generate config, project memory, and a smoke eval without opening the TUI.
 arguscode init

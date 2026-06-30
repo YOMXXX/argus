@@ -1,5 +1,6 @@
 use crate::config::{ArgusCodeConfig, CONFIG_PATH};
 use crate::project::{detect_project, init_project, ProjectProfile};
+use crate::tasks::{list_tasks, queue_task, TaskRecord};
 use anyhow::Result;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::crossterm::execute;
@@ -73,18 +74,33 @@ pub struct WorkbenchApp {
     pub active_pane: WorkbenchPane,
     pub mode: WorkbenchMode,
     pub palette_selected: usize,
+    pub task_queue: Vec<TaskRecord>,
     pub input: String,
     pub status: String,
 }
 
 impl WorkbenchApp {
     pub fn new(profile: ProjectProfile, config: ArgusCodeConfig) -> Self {
+        Self::with_task_queue(profile, config, Vec::new())
+    }
+
+    pub fn load(profile: ProjectProfile, config: ArgusCodeConfig) -> Result<Self> {
+        let task_queue = list_tasks(&profile.root)?;
+        Ok(Self::with_task_queue(profile, config, task_queue))
+    }
+
+    fn with_task_queue(
+        profile: ProjectProfile,
+        config: ArgusCodeConfig,
+        task_queue: Vec<TaskRecord>,
+    ) -> Self {
         Self {
             profile,
             config,
             active_pane: WorkbenchPane::Session,
             mode: WorkbenchMode::Normal,
             palette_selected: 0,
+            task_queue,
             input: String::new(),
             status: "Ready. Type a task, Tab switches panes, Ctrl+K opens command palette.".into(),
         }
@@ -108,14 +124,20 @@ impl WorkbenchApp {
     }
 
     pub fn submit_input(&mut self) {
-        let task = self.input.trim();
+        let task = self.input.trim().to_string();
         if task.is_empty() {
             self.status = "Enter a task to start an ArgusCode session.".into();
         } else {
-            self.status = format!(
-                "Queued task: {task}. Full live agent execution lands in the next harness milestone."
-            );
-            self.input.clear();
+            match queue_task(&self.profile.root, &task) {
+                Ok(record) => {
+                    self.status = format!("Queued task {}: {}", record.id, record.text);
+                    self.task_queue.push(record);
+                    self.input.clear();
+                }
+                Err(err) => {
+                    self.status = format!("Could not queue task: {err}");
+                }
+            }
         }
     }
 
@@ -219,7 +241,7 @@ pub fn ensure_config(root: &Path) -> Result<(ProjectProfile, ArgusCodeConfig)> {
 
 pub fn run_workbench(start: &Path) -> Result<()> {
     let (profile, config) = ensure_config(start)?;
-    let mut app = WorkbenchApp::new(profile, config);
+    let mut app = WorkbenchApp::load(profile, config)?;
 
     enable_raw_mode()?;
     let mut stdout = std::io::stdout();
@@ -348,11 +370,12 @@ fn render_project(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
             ),
         ])),
         ListItem::new(""),
-        ListItem::new("Tasks"),
-        ListItem::new("● active session"),
-        ListItem::new("○ verify workspace"),
-        ListItem::new("○ eval smoke"),
+        ListItem::new("Queue"),
+        ListItem::new(format!("{} queued", app.task_queue.len())),
     ];
+    for task in app.task_queue.iter().rev().take(3) {
+        items.push(ListItem::new(format!("[{}] {}", task.status, task.text)));
+    }
     if !app.profile.rules_files.is_empty() {
         items.push(ListItem::new(""));
         items.push(ListItem::new("Imported rules"));
@@ -375,13 +398,25 @@ fn render_session(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
     } else {
         app.config.verify.commands.join("\n")
     };
+    let queue = if app.task_queue.is_empty() {
+        "(empty)".to_string()
+    } else {
+        app.task_queue
+            .iter()
+            .rev()
+            .take(5)
+            .map(|task| format!("[{}] {}  {}", task.status, task.id, task.text))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     let text = format!(
-        "Chat\n> {}\n\nPlan\n1. Understand the request and repo rules.\n2. Edit through the harness.\n3. Run verification gate.\n4. Record trace and summarize evidence.\n\nDiff Preview\n(no pending diff)\n\nVerify Profile\n{}",
+        "Chat\n> {}\n\nTask Queue\n{}\n\nPlan\n1. Understand the request and repo rules.\n2. Edit through the harness.\n3. Run verification gate.\n4. Record trace and summarize evidence.\n\nDiff Preview\n(no pending diff)\n\nVerify Profile\n{}",
         if app.input.is_empty() {
             "Type a task here, then press Enter.".to_string()
         } else {
             app.input.clone()
         },
+        queue,
         verify
     );
     f.render_widget(
@@ -537,12 +572,17 @@ fn panel_block(title: &'static str, active: bool) -> Block<'static> {
 mod tests {
     use super::*;
     use crate::project::build_config;
+    use crate::tasks::{list_tasks, queue_task};
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::KeyModifiers;
 
     fn app() -> WorkbenchApp {
+        app_with_root(PathBuf::from("/tmp/demo"))
+    }
+
+    fn app_with_root(root: PathBuf) -> WorkbenchApp {
         let profile = ProjectProfile {
-            root: PathBuf::from("/tmp/demo"),
+            root,
             name: "demo".into(),
             languages: vec!["rust".into()],
             package_manager: Some("cargo".into()),
@@ -552,6 +592,17 @@ mod tests {
         };
         let config = build_config(&profile);
         WorkbenchApp::new(profile, config)
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "arguscode-workbench-{name}-{}-{nanos}",
+            std::process::id()
+        ))
     }
 
     #[test]
@@ -639,5 +690,50 @@ mod tests {
             .collect();
         assert!(text.contains("ArgusCode Help"), "{text}");
         assert!(text.contains("Ctrl+K"), "{text}");
+    }
+
+    #[test]
+    fn workbench_loads_existing_task_queue() {
+        let dir = temp_dir("load-queue");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = app_with_root(dir.clone());
+        queue_task(&dir, "ship the queue panel").unwrap();
+
+        app = WorkbenchApp::load(app.profile, app.config).unwrap();
+
+        assert_eq!(app.task_queue.len(), 1);
+        assert_eq!(app.task_queue[0].text, "ship the queue panel");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn enter_queues_task_to_disk_and_renders_queue() {
+        let dir = temp_dir("submit-queue");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = app_with_root(dir.clone());
+
+        for c in "fix flaky parser tests".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert!(app.input.is_empty());
+        assert_eq!(app.task_queue.len(), 1);
+        assert_eq!(list_tasks(&dir).unwrap()[0].text, "fix flaky parser tests");
+        assert!(app.status.contains("Queued task"), "{}", app.status);
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 32)).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("fix flaky parser tests"), "{text}");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
