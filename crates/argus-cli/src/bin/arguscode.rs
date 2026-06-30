@@ -1,6 +1,7 @@
 use anyhow::Result;
 use argus_cli::harness::{run_task_through_harness, HarnessRunOutput};
 use argus_cli::project::{detect_project, init_project, init_report_text};
+use argus_cli::sessions::list_sessions;
 use argus_cli::tasks::{latest_resumable_task, list_tasks, queue_task, TaskRecord};
 use argus_cli::workbench::{ensure_config, run_workbench};
 use argus_core::{CommandVerifier, Verifier};
@@ -56,6 +57,8 @@ enum Commands {
         #[command(subcommand)]
         command: Option<ProviderCommands>,
     },
+    /// List recorded ArgusCode task sessions.
+    History,
     /// Check local project readiness for ArgusCode.
     Doctor,
 }
@@ -113,6 +116,7 @@ async fn main() -> Result<()> {
         Commands::Resume { run } => resume(&cwd, run),
         Commands::Verify => verify(&cwd).await,
         Commands::Provider { command } => provider_command(&cwd, command),
+        Commands::History => history(&cwd),
         Commands::Doctor => doctor(&cwd),
     }
 }
@@ -258,6 +262,26 @@ fn print_provider(config: &argus_cli::config::ArgusCodeConfig) {
     if let Some(api_key_env) = &config.provider.api_key_env {
         println!("api key env: {api_key_env}");
     }
+}
+
+fn history(cwd: &std::path::Path) -> Result<()> {
+    let (profile, _) = ensure_config(cwd)?;
+    let sessions = list_sessions(&profile.root)?;
+    println!("ArgusCode history");
+    if sessions.is_empty() {
+        println!("(empty)");
+    } else {
+        for session in sessions.iter().rev() {
+            println!(
+                "[{}] {}  {}  {}",
+                session.status,
+                session.id,
+                session.task_text,
+                session.trace.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 fn status(cwd: &std::path::Path) -> Result<()> {

@@ -424,6 +424,60 @@ fn arguscode_resume_run_executes_latest_task_and_updates_status() {
 }
 
 #[test]
+fn arguscode_history_lists_completed_harness_runs() {
+    let dir = std::env::temp_dir().join(format!("arguscode-history-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("package.json"),
+        "{\"scripts\":{\"test\":\"echo ok\"}}\n",
+    )
+    .unwrap();
+
+    let queue = Command::new(arguscode_bin())
+        .args(["task", "record this session"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(queue.status.success(), "arguscode task failed: {queue:?}");
+
+    let resume = Command::new(arguscode_bin())
+        .args(["resume", "--run"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        resume.status.success(),
+        "arguscode resume --run failed: {resume:?}"
+    );
+    assert!(dir.join(".argus/sessions/history.jsonl").exists());
+
+    let history = Command::new(arguscode_bin())
+        .arg("history")
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(history.status.success(), "history failed: {history:?}");
+    let stdout = String::from_utf8_lossy(&history.stdout);
+    assert!(stdout.contains("ArgusCode history"), "stdout: {stdout}");
+    assert!(stdout.contains("record this session"), "stdout: {stdout}");
+    assert!(stdout.contains("done"), "stdout: {stdout}");
+    assert!(stdout.contains(".trace.jsonl"), "stdout: {stdout}");
+
+    let history_file = std::fs::read_to_string(dir.join(".argus/sessions/history.jsonl")).unwrap();
+    assert!(
+        history_file.contains("\"status\":\"done\""),
+        "{history_file}"
+    );
+    assert!(
+        history_file.contains("record this session"),
+        "{history_file}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn fork_reruns_task_from_trace() {
     let dir = std::env::temp_dir().join(format!("argus-fork-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

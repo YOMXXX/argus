@@ -1,4 +1,5 @@
 use crate::config::ArgusCodeConfig;
+use crate::sessions::append_session;
 use crate::tasks::{update_task_status, TaskRecord};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -27,6 +28,7 @@ pub fn run_task_through_harness(root: &Path, record: &TaskRecord) -> Result<Harn
 
     if output.status.success() {
         update_task_status(root, &record.id, "done")?;
+        append_session(root, &record.id, &record.text, "done", trace.clone())?;
         Ok(HarnessRunOutput {
             task_id: record.id.clone(),
             task_text: record.text.clone(),
@@ -37,6 +39,7 @@ pub fn run_task_through_harness(root: &Path, record: &TaskRecord) -> Result<Harn
         })
     } else {
         update_task_status(root, &record.id, "failed")?;
+        append_session(root, &record.id, &record.text, "failed", trace)?;
         anyhow::bail!(
             "Argus harness failed with {}\n--- stdout ---\n{}\n--- stderr ---\n{}",
             output.status,

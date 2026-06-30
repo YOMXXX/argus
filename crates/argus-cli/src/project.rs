@@ -204,6 +204,7 @@ pub fn init_project(start: &Path, force: bool) -> Result<InitReport> {
     std::fs::create_dir_all(argus_dir.join("memory"))?;
     std::fs::create_dir_all(argus_dir.join("evals"))?;
     std::fs::create_dir_all(argus_dir.join("tasks"))?;
+    std::fs::create_dir_all(argus_dir.join("sessions"))?;
 
     let config_path = ArgusCodeConfig::path(&profile.root);
     let created_config = force || !config_path.exists();

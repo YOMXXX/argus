@@ -127,6 +127,7 @@ arguscode task "fix the failing parser test"
 arguscode resume
 arguscode resume --run
 arguscode verify
+arguscode history
 
 # Use an OpenAI-compatible provider profile without writing keys to config.
 arguscode provider deepseek --model deepseek-chat

@@ -22,6 +22,7 @@ Primary proof:
 - `arguscode resume --run` executes the latest queued task through the Argus harness and writes a per-task trace.
 - `arguscode verify` runs the same detected verification gate without leaving the ArgusCode entrypoint.
 - `arguscode provider deepseek` configures an OpenAI-compatible model profile while keeping API keys in environment variables.
+- `arguscode history` lists completed task sessions from `.argus/sessions/history.jsonl`.
 - `argus demo` shows the verification gate catching a bad result and forcing a fix.
 - `argus trace show` exposes the black-box timeline.
 - `argus mcp-serve` gives existing agents a verification tool without switching workflows.
