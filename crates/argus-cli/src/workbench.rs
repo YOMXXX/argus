@@ -1,4 +1,5 @@
 use crate::config::{ArgusCodeConfig, CONFIG_PATH};
+use crate::diff::load_diff_preview;
 use crate::harness::{run_task_through_harness, HarnessRunOutput};
 use crate::project::{detect_project, init_project, ProjectProfile};
 use crate::sessions::{list_sessions, SessionRecord};
@@ -37,6 +38,7 @@ enum PaletteAction {
     Verify,
     Memory,
     History,
+    RefreshDiff,
     SmokeEval,
     NewTask,
 }
@@ -70,6 +72,11 @@ const PALETTE_ITEMS: &[PaletteItem] = &[
         detail: "Focus Trace / Memory and review completed task sessions",
     },
     PaletteItem {
+        action: PaletteAction::RefreshDiff,
+        label: "Refresh diff preview",
+        detail: "Reload git status and diff summary into the session panel",
+    },
+    PaletteItem {
         action: PaletteAction::SmokeEval,
         label: "Open smoke eval",
         detail: "Prepare the generated .argus/evals/smoke.json suite",
@@ -90,6 +97,7 @@ pub struct WorkbenchApp {
     pub palette_selected: usize,
     pub task_queue: Vec<TaskRecord>,
     pub session_history: Vec<SessionRecord>,
+    pub diff_preview: String,
     pub terminal_log: Vec<String>,
     pub latest_trace_path: Option<PathBuf>,
     pub input: String,
@@ -98,17 +106,25 @@ pub struct WorkbenchApp {
 
 impl WorkbenchApp {
     pub fn new(profile: ProjectProfile, config: ArgusCodeConfig) -> Self {
-        Self::with_state(profile, config, Vec::new(), Vec::new())
+        Self::with_state(
+            profile,
+            config,
+            Vec::new(),
+            Vec::new(),
+            "(not loaded)".into(),
+        )
     }
 
     pub fn load(profile: ProjectProfile, config: ArgusCodeConfig) -> Result<Self> {
         let task_queue = list_tasks(&profile.root)?;
         let session_history = list_sessions(&profile.root)?;
+        let diff_preview = load_diff_preview(&profile.root)?;
         Ok(Self::with_state(
             profile,
             config,
             task_queue,
             session_history,
+            diff_preview,
         ))
     }
 
@@ -117,6 +133,7 @@ impl WorkbenchApp {
         config: ArgusCodeConfig,
         task_queue: Vec<TaskRecord>,
         session_history: Vec<SessionRecord>,
+        diff_preview: String,
     ) -> Self {
         let latest_trace_path = session_history.last().map(|session| session.trace.clone());
         Self {
@@ -127,6 +144,7 @@ impl WorkbenchApp {
             palette_selected: 0,
             task_queue,
             session_history,
+            diff_preview,
             terminal_log: Vec::new(),
             latest_trace_path,
             input: String::new(),
@@ -223,6 +241,18 @@ impl WorkbenchApp {
                     self.session_history.len()
                 );
             }
+            PaletteAction::RefreshDiff => {
+                self.active_pane = WorkbenchPane::Session;
+                match load_diff_preview(&self.profile.root) {
+                    Ok(preview) => {
+                        self.diff_preview = preview;
+                        self.status = "Diff preview refreshed.".into();
+                    }
+                    Err(err) => {
+                        self.status = format!("Could not refresh diff preview: {err}");
+                    }
+                }
+            }
             PaletteAction::SmokeEval => {
                 self.active_pane = WorkbenchPane::Trace;
                 self.status = "Smoke eval ready: argus eval .argus/evals/smoke.json".into();
@@ -263,12 +293,14 @@ impl WorkbenchApp {
                     .push(format!("trace: {}", output.trace.display()));
                 self.task_queue = list_tasks(&self.profile.root)?;
                 self.session_history = list_sessions(&self.profile.root)?;
+                self.diff_preview = load_diff_preview(&self.profile.root)?;
                 self.status = format!("Task {} {}", output.task_id, output.status);
                 Ok(())
             }
             Err(err) => {
                 self.task_queue = list_tasks(&self.profile.root)?;
                 self.session_history = list_sessions(&self.profile.root)?;
+                self.diff_preview = load_diff_preview(&self.profile.root)?;
                 self.status = format!("Harness run failed: {err}");
                 self.terminal_log.push(format!("error: {err}"));
                 Err(err)
@@ -494,13 +526,14 @@ fn render_session(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
             .join("\n")
     };
     let text = format!(
-        "Chat\n> {}\n\nTask Queue\n{}\n\nPlan\n1. Understand the request and repo rules.\n2. Edit through the harness.\n3. Run verification gate.\n4. Record trace and summarize evidence.\n\nDiff Preview\n(no pending diff)\n\nVerify Profile\n{}",
+        "Chat\n> {}\n\nTask Queue\n{}\n\nPlan\n1. Understand the request and repo rules.\n2. Edit through the harness.\n3. Run verification gate.\n4. Record trace and summarize evidence.\n\nDiff Preview\n{}\n\nVerify Profile\n{}",
         if app.input.is_empty() {
             "Type a task here, then press Enter.".to_string()
         } else {
             app.input.clone()
         },
         queue,
+        app.diff_preview,
         verify
     );
     f.render_widget(
@@ -807,6 +840,40 @@ mod tests {
     }
 
     #[test]
+    fn command_palette_refreshes_diff_preview() {
+        let dir = temp_dir("refresh-diff");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let mut app = app_with_root(dir.clone());
+        app.diff_preview = "stale".into();
+        std::fs::write(dir.join("later.txt"), "later\n").unwrap();
+
+        handle_key(&mut app, KeyCode::Char('k'), KeyModifiers::CONTROL);
+        for _ in 0..4 {
+            handle_key(&mut app, KeyCode::Down, KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert_eq!(app.active_pane, WorkbenchPane::Session);
+        assert!(
+            app.status.contains("Diff preview refreshed"),
+            "{}",
+            app.status
+        );
+        assert!(
+            app.diff_preview.contains("later.txt"),
+            "{}",
+            app.diff_preview
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn help_overlay_toggles_from_keyboard_and_renders_shortcuts() {
         let mut app = app();
 
@@ -961,6 +1028,46 @@ mod tests {
         assert!(text.contains("Session History"), "{text}");
         assert!(text.contains("ship the history panel"), "{text}");
         assert!(text.contains("task-1.trace.jsonl"), "{text}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workbench_loads_and_renders_diff_preview() {
+        let dir = temp_dir("diff-preview");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::fs::write(dir.join("pending.txt"), "pending\n").unwrap();
+        let app = app_with_root(dir.clone());
+
+        let app = WorkbenchApp::load(app.profile, app.config).unwrap();
+
+        assert!(
+            app.diff_preview.contains("Git Status"),
+            "{}",
+            app.diff_preview
+        );
+        assert!(
+            app.diff_preview.contains("?? pending.txt"),
+            "{}",
+            app.diff_preview
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 36)).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("Diff Preview"), "{text}");
+        assert!(text.contains("pending.txt"), "{text}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

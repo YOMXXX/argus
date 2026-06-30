@@ -1,4 +1,5 @@
 pub mod config;
+pub mod diff;
 pub mod harness;
 pub mod project;
 pub mod sessions;
