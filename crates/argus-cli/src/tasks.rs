@@ -3,8 +3,10 @@ use serde::{Deserialize, Serialize};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const TASK_QUEUE_PATH: &str = ".argus/tasks/queue.jsonl";
+static TASK_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskRecord {
@@ -25,7 +27,7 @@ pub fn queue_task(root: &Path, text: &str) -> Result<TaskRecord> {
     }
     let created_ms = now_ms();
     let record = TaskRecord {
-        id: format!("task-{created_ms}"),
+        id: next_task_id(created_ms),
         text: text.to_string(),
         status: "queued".into(),
         created_ms,
@@ -112,6 +114,11 @@ fn now_ms() -> u128 {
         .unwrap_or(0)
 }
 
+fn next_task_id(created_ms: u128) -> String {
+    let sequence = TASK_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("task-{created_ms}-{}-{sequence}", std::process::id())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -139,6 +146,25 @@ mod tests {
         assert_eq!(tasks.len(), 2);
         assert_eq!(tasks[0], first);
         assert_eq!(latest_task(&dir).unwrap(), Some(second));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn queued_task_ids_are_unique_for_bursts() {
+        let dir = temp_dir("burst");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        for i in 0..64 {
+            queue_task(&dir, &format!("task {i}")).unwrap();
+        }
+
+        let tasks = list_tasks(&dir).unwrap();
+        let ids = tasks
+            .iter()
+            .map(|task| task.id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(ids.len(), tasks.len(), "tasks: {tasks:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
