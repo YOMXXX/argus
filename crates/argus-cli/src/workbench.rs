@@ -376,6 +376,8 @@ impl WorkbenchApp {
                 self.refresh_memory_preview("Memory opened.");
             }
             "/remember" => self.remember_lesson(&args.join(" ")),
+            "/mcp" => self.update_mcp_profile(&args),
+            "/mcp-allow" => self.add_mcp_allow(args.first().copied()),
             "/sandbox" => self.update_sandbox_profile(args.first().copied()),
             "/approval" => self.update_approval_profile(args.first().copied()),
             "/model" | "/provider" => {
@@ -464,6 +466,60 @@ impl WorkbenchApp {
                 self.status = format!("Could not remember lesson: {err}");
             }
         }
+    }
+
+    fn update_mcp_profile(&mut self, args: &[&str]) {
+        if args.is_empty() {
+            self.show_mcp_profile("MCP profile shown.");
+            return;
+        }
+        if args[0] == "off" {
+            self.config.mcp.command = None;
+            self.config.mcp.allow.clear();
+            self.persist_mcp_profile("MCP profile updated");
+            return;
+        }
+        self.config.mcp.command = Some(args.join(" "));
+        self.persist_mcp_profile("MCP profile updated");
+    }
+
+    fn add_mcp_allow(&mut self, tool: Option<&str>) {
+        let Some(tool) = tool else {
+            self.show_mcp_profile("MCP profile shown.");
+            return;
+        };
+        if !self.config.mcp.allow.iter().any(|item| item == tool) {
+            self.config.mcp.allow.push(tool.to_string());
+        }
+        self.persist_mcp_profile("MCP profile updated");
+    }
+
+    fn persist_mcp_profile(&mut self, label: &str) {
+        match self.config.write(&self.profile.root) {
+            Ok(_) => self.show_mcp_profile(label),
+            Err(err) => {
+                self.active_pane = WorkbenchPane::Terminal;
+                self.status = format!("Could not write MCP profile: {err}");
+            }
+        }
+    }
+
+    fn show_mcp_profile(&mut self, status: &str) {
+        self.active_pane = WorkbenchPane::Terminal;
+        self.terminal_log = vec![format!(
+            "mcp: {}",
+            self.config.mcp.command.as_deref().unwrap_or("(off)")
+        )];
+        if self.config.mcp.allow.is_empty() {
+            self.terminal_log.push("allow: (empty)".into());
+        } else {
+            self.terminal_log
+                .push(format!("allow: {}", self.config.mcp.allow.join(", ")));
+        }
+        self.status = format!(
+            "{status}: {}",
+            self.config.mcp.command.as_deref().unwrap_or("(off)")
+        );
     }
 
     fn update_sandbox_profile(&mut self, sandbox: Option<&str>) {
@@ -1283,6 +1339,8 @@ Slash commands\n\
 /history Open session history\n\
 /memory  Refresh project memory preview\n\
 /remember Append a durable lesson\n\
+/mcp     Set/show MCP server command\n\
+/mcp-allow Allow an MCP tool by name\n\
 /model   Set or show current model\n\
 /provider Set or show provider profile\n\
 /sandbox Set or show sandbox profile\n\
@@ -2095,6 +2153,37 @@ mod tests {
             lessons.contains("- Always run clippy before release"),
             "{lessons}"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_mcp_updates_server_and_allowlist_config() {
+        let dir = temp_dir("slash-mcp");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = app_with_root(dir.clone());
+
+        for c in "/mcp argus __mcp-mock".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert_eq!(app.config.mcp.command.as_deref(), Some("argus __mcp-mock"));
+        assert!(app.status.contains("MCP profile updated"), "{}", app.status);
+
+        for c in "/mcp-allow echo".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert_eq!(app.config.mcp.allow, vec!["echo"]);
+        let saved = ArgusCodeConfig::read(&dir).unwrap();
+        assert_eq!(saved.mcp.command.as_deref(), Some("argus __mcp-mock"));
+        assert_eq!(saved.mcp.allow, vec!["echo"]);
+        assert_eq!(app.active_pane, WorkbenchPane::Terminal);
+        let terminal = app.terminal_log.join("\n");
+        assert!(terminal.contains("mcp: argus __mcp-mock"), "{terminal}");
+        assert!(terminal.contains("allow: echo"), "{terminal}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

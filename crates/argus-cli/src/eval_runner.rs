@@ -137,6 +137,7 @@ mod tests {
                 api_key_env: Some("ARGUS_TEST_EVAL_KEY".into()),
             },
             security: SecurityConfig::default(),
+            mcp: crate::config::McpConfig::default(),
             verify: VerifyConfig {
                 commands: vec!["cargo test".into()],
                 gate: true,

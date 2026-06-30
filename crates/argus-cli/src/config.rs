@@ -14,6 +14,8 @@ pub struct ArgusCodeConfig {
     pub provider: ProviderConfig,
     #[serde(default)]
     pub security: SecurityConfig,
+    #[serde(default)]
+    pub mcp: McpConfig,
     pub verify: VerifyConfig,
     pub rules: RulesConfig,
     pub memory: MemoryConfig,
@@ -52,6 +54,14 @@ impl Default for SecurityConfig {
             approval: "auto".into(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct McpConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub allow: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -123,6 +133,7 @@ mod tests {
                 api_key_env: None,
             },
             security: SecurityConfig::default(),
+            mcp: McpConfig::default(),
             verify: VerifyConfig {
                 commands: vec!["cargo test".into()],
                 gate: true,
@@ -181,5 +192,7 @@ theme = "nocturne"
 
         assert_eq!(parsed.security.sandbox, "workspace-write");
         assert_eq!(parsed.security.approval, "auto");
+        assert_eq!(parsed.mcp.command, None);
+        assert!(parsed.mcp.allow.is_empty());
     }
 }

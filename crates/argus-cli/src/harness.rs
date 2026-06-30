@@ -80,6 +80,12 @@ fn build_argus_run_command(
             command.env("OPENAI_API_KEY", value);
         }
     }
+    if let Some(mcp_command) = &config.mcp.command {
+        command.arg("--mcp").arg(mcp_command);
+        for allowed in &config.mcp.allow {
+            command.arg("--mcp-allow").arg(allowed);
+        }
+    }
     for verify in &config.verify.commands {
         command.arg("--verify").arg(verify);
     }
@@ -124,6 +130,7 @@ mod tests {
                 api_key_env: Some("ARGUS_TEST_PROVIDER_KEY".into()),
             },
             security: SecurityConfig::default(),
+            mcp: crate::config::McpConfig::default(),
             verify: VerifyConfig {
                 commands: vec!["cargo test".into()],
                 gate: true,
@@ -204,6 +211,7 @@ mod tests {
                 sandbox: "read-only".into(),
                 approval: "ask".into(),
             },
+            mcp: crate::config::McpConfig::default(),
             verify: VerifyConfig {
                 commands: vec![],
                 gate: true,
@@ -259,5 +267,74 @@ mod tests {
             .map(|arg| arg.to_string_lossy().to_string())
             .collect::<Vec<_>>();
         assert!(args.iter().any(|arg| arg == "--yes"), "{args:?}");
+    }
+
+    #[test]
+    fn mcp_config_maps_to_argus_run_mcp_args() {
+        let config = ArgusCodeConfig {
+            schema_version: 1,
+            project: ProjectConfig {
+                name: "demo".into(),
+                root: ".".into(),
+                languages: vec!["rust".into()],
+                package_manager: Some("cargo".into()),
+            },
+            provider: ProviderConfig {
+                default_provider: "mock".into(),
+                default_model: "mock".into(),
+                routing: "manual".into(),
+                base_url: None,
+                api_key_env: None,
+            },
+            security: SecurityConfig::default(),
+            mcp: crate::config::McpConfig {
+                command: Some("argus __mcp-mock".into()),
+                allow: vec!["echo".into(), "read_file".into()],
+            },
+            verify: VerifyConfig {
+                commands: vec![],
+                gate: true,
+            },
+            rules: RulesConfig { imported: vec![] },
+            memory: MemoryConfig {
+                project: ".argus/memory/project.md".into(),
+                lessons: ".argus/memory/lessons.md".into(),
+            },
+            ui: UiConfig {
+                default_view: "workbench".into(),
+                theme: "nocturne".into(),
+            },
+        };
+        let record = TaskRecord {
+            id: "task-1".into(),
+            text: "call external tool".into(),
+            status: "queued".into(),
+            created_ms: 1,
+        };
+
+        let command = build_argus_run_command(
+            Path::new("argus"),
+            Path::new("/tmp/demo"),
+            &config,
+            &record,
+            Path::new(".argus/tasks/task-1.trace.jsonl"),
+        );
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--mcp", "argus __mcp-mock"]),
+            "{args:?}"
+        );
+        assert_eq!(
+            args.windows(2)
+                .filter(|pair| pair[0] == "--mcp-allow")
+                .map(|pair| pair[1].clone())
+                .collect::<Vec<_>>(),
+            vec!["echo", "read_file"]
+        );
     }
 }

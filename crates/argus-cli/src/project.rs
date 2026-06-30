@@ -176,6 +176,7 @@ pub fn build_config(profile: &ProjectProfile) -> ArgusCodeConfig {
             api_key_env: None,
         },
         security: SecurityConfig::default(),
+        mcp: crate::config::McpConfig::default(),
         verify: VerifyConfig {
             commands: profile.verify_commands.clone(),
             gate: true,
