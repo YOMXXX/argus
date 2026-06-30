@@ -105,6 +105,7 @@ Building from source requires a recent stable Rust toolchain (`rustup`/`cargo`/`
 Want to help people discover Argus?
 
 - Static landing page: [`site/index.html`](site/index.html)
+- GitHub Pages deployment: [`.github/workflows/pages.yml`](.github/workflows/pages.yml)
 - Hacker News / Product Hunt / social copy: [`launch/`](launch/)
 - The 60-second demo script: [`launch/demo-script.md`](launch/demo-script.md)
 
