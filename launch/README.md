@@ -25,6 +25,7 @@ Primary proof:
 - `arguscode history` lists completed task sessions from `.argus/sessions/history.jsonl`.
 - The Workbench Trace panel renders recent session history and the latest task trace timeline.
 - The Workbench Session panel renders git status/diff preview and can refresh it from the command palette.
+- The Workbench Terminal panel can execute the configured verification gate from the command palette.
 - `argus demo` shows the verification gate catching a bad result and forcing a fix.
 - `argus trace show` exposes the black-box timeline.
 - `argus mcp-serve` gives existing agents a verification tool without switching workflows.

@@ -120,6 +120,7 @@ arguscode
 # Press Ctrl+K, then run the latest queued task through the harness.
 # The Trace panel shows recent session history and the latest task trace timeline.
 # The session panel shows git status/diff preview and can refresh it from Ctrl+K.
+# The Terminal panel can run the configured verification gate from Ctrl+K.
 
 # Generate config, project memory, and a smoke eval without opening the TUI.
 arguscode init

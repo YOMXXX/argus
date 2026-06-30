@@ -19,6 +19,7 @@
 - Added session history rendering inside the Workbench Trace panel and a command palette shortcut to open it.
 - Added real Workbench diff preview from git status/diff with a command palette refresh action.
 - Added real Workbench trace timeline preview from the latest task JSONL trace.
+- Added executable Workbench verification gate output in the Terminal panel.
 - Updated release packaging and installer support so archives install both `argus` and `arguscode`.
 
 ## 0.1.1 - 2026-06-30

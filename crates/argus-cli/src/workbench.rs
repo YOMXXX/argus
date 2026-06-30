@@ -5,6 +5,7 @@ use crate::project::{detect_project, init_project, ProjectProfile};
 use crate::sessions::{list_sessions, SessionRecord};
 use crate::tasks::{latest_resumable_task, list_tasks, queue_task, TaskRecord};
 use crate::trace_view::{load_trace_preview, TracePreview};
+use crate::verify::run_configured_verify;
 use anyhow::Result;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::crossterm::execute;
@@ -230,13 +231,9 @@ impl WorkbenchApp {
                 }
             }
             PaletteAction::Verify => {
-                self.active_pane = WorkbenchPane::Terminal;
-                let commands = if self.config.verify.commands.is_empty() {
-                    "no verify command configured".into()
-                } else {
-                    self.config.verify.commands.join(" && ")
-                };
-                self.status = format!("Ready to verify: {commands}");
+                if let Err(err) = self.run_verify_gate() {
+                    self.status = format!("Verification failed: {err}");
+                }
             }
             PaletteAction::Memory => {
                 self.active_pane = WorkbenchPane::Trace;
@@ -326,6 +323,32 @@ impl WorkbenchApp {
                 self.terminal_log.push(format!("error: {err}"));
                 Err(err)
             }
+        }
+    }
+
+    pub fn run_verify_gate(&mut self) -> Result<()> {
+        self.active_pane = WorkbenchPane::Terminal;
+        self.terminal_log = if self.config.verify.commands.is_empty() {
+            vec!["No verification command configured.".into()]
+        } else {
+            self.config
+                .verify
+                .commands
+                .iter()
+                .map(|command| format!("$ {command}"))
+                .collect()
+        };
+
+        let output = run_configured_verify(&self.profile.root, &self.config.verify.commands)?;
+        self.terminal_log.push(output.detail.clone());
+        if output.passed {
+            self.terminal_log.push("verification passed".into());
+            self.status = format!("Verification passed: {} command(s)", output.commands.len());
+            Ok(())
+        } else {
+            self.terminal_log.push("verification failed".into());
+            self.status = "Verification failed.".into();
+            anyhow::bail!(output.detail)
         }
     }
 }
@@ -800,8 +823,12 @@ mod tests {
     }
 
     #[test]
-    fn command_palette_opens_and_executes_verify_action() {
-        let mut app = app();
+    fn command_palette_runs_verify_gate() {
+        let dir = temp_dir("verify-action");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("marker.txt"), "ok\n").unwrap();
+        let mut app = app_with_root(dir.clone());
+        app.config.verify.commands = vec!["test -f marker.txt".into()];
 
         assert_eq!(app.mode, WorkbenchMode::Normal);
         assert!(handle_key(
@@ -816,7 +843,31 @@ mod tests {
         assert!(handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty()));
         assert_eq!(app.mode, WorkbenchMode::Normal);
         assert_eq!(app.active_pane, WorkbenchPane::Terminal);
-        assert!(app.status.contains("Ready to verify"), "{}", app.status);
+        assert!(app.status.contains("Verification passed"), "{}", app.status);
+        assert!(
+            app.terminal_log.join("\n").contains("$ test -f marker.txt"),
+            "{:?}",
+            app.terminal_log
+        );
+        assert!(
+            app.terminal_log.join("\n").contains("1 check(s) passed"),
+            "{:?}",
+            app.terminal_log
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 32)).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("test -f marker.txt"), "{text}");
+        assert!(text.contains("verification passed"), "{text}");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

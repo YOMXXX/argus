@@ -6,4 +6,5 @@ pub mod sessions;
 pub mod tasks;
 pub mod trace_view;
 pub mod tui;
+pub mod verify;
 pub mod workbench;
