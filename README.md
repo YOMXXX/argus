@@ -89,7 +89,7 @@ cargo install --path crates/argus-cli     # installs `argus` into ~/.cargo/bin
 argus --help
 ```
 
-From a GitHub Release, once a tagged release exists:
+From the GitHub Release:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/YOMXXX/argus/master/install.sh \
@@ -99,6 +99,14 @@ curl -fsSL https://raw.githubusercontent.com/YOMXXX/argus/master/install.sh \
 The installer supports macOS and Linux prebuilt archives, downloads the matching `.sha256`, verifies it, then installs `argus` to `${ARGUS_INSTALL_DIR:-$HOME/.local/bin}`.
 
 Building from source requires a recent stable Rust toolchain (`rustup`/`cargo`/`rustc`).
+
+## Share / launch kit
+
+Want to help people discover Argus?
+
+- Static landing page: [`site/index.html`](site/index.html)
+- Hacker News / Product Hunt / social copy: [`launch/`](launch/)
+- The 60-second demo script: [`launch/demo-script.md`](launch/demo-script.md)
 
 ## Quick start (no API key needed)
 

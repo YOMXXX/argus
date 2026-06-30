@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Argus - Make Your AI Coding Agent Prove It Works</title>
+    <meta name="description" content="Argus is an open-source black box and verification gate for AI coding agents. Record every step, run verification, and plug into MCP-capable agents.">
+    <meta property="og:title" content="Argus - Make Your AI Coding Agent Prove It Works">
+    <meta property="og:description" content="Open-source black-box traces, verification gates, repo-local evals, and MCP tools for AI coding agents.">
+    <meta property="og:type" content="website">
+    <meta property="og:image" content="https://raw.githubusercontent.com/YOMXXX/argus/master/benchmarks/demo.gif">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="https://github.com/YOMXXX/argus">Argus</a>
+      <nav aria-label="Primary navigation">
+        <a href="#demo">Demo</a>
+        <a href="#install">Install</a>
+        <a href="#mcp">MCP</a>
+        <a class="nav-cta" href="https://github.com/YOMXXX/argus">GitHub</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Open-source verification for AI coding agents</p>
+          <h1>Make your AI coding agent prove it works.</h1>
+          <p class="lede">
+            Argus records the black-box timeline, runs your verification commands,
+            and blocks fake "done" claims until build, test, or lint checks pass.
+          </p>
+          <div class="hero-actions" aria-label="Primary actions">
+            <a class="button primary" href="#install">Install v0.1.1</a>
+            <a class="button secondary" href="https://github.com/YOMXXX/argus">Star on GitHub</a>
+          </div>
+        </div>
+        <figure class="hero-demo" id="demo">
+          <img src="https://raw.githubusercontent.com/YOMXXX/argus/master/benchmarks/demo.gif" alt="Argus verification gate terminal demo">
+          <figcaption>Zero-config demo: a bad result gets caught, fixed, and recorded.</figcaption>
+        </figure>
+      </section>
+
+      <section class="proof-grid" aria-label="Argus proof points">
+        <article>
+          <span class="label">Verification gate</span>
+          <h2>No success without proof.</h2>
+          <p>Make agent output pass your own commands before it can be reported as complete.</p>
+        </article>
+        <article>
+          <span class="label">Black-box trace</span>
+          <h2>Replay what happened.</h2>
+          <p>Task events, model calls, tool calls, route decisions, and verification results are written as JSONL.</p>
+        </article>
+        <article>
+          <span class="label">Repo-local evals</span>
+          <h2>Measure your workflow.</h2>
+          <p>Run repeated coding tasks against your own repository and compare pass rates.</p>
+        </article>
+      </section>
+
+      <section class="band" id="install">
+        <div class="section-copy">
+          <p class="eyebrow">Install</p>
+          <h2>Run the demo without an API key.</h2>
+          <p>The release installer downloads a prebuilt binary and verifies its SHA-256 checksum.</p>
+        </div>
+        <pre><code>curl -fsSL https://raw.githubusercontent.com/YOMXXX/argus/master/install.sh \
+  | ARGUS_VERSION=v0.1.1 sh
+
+argus demo</code></pre>
+      </section>
+
+      <section class="split" id="mcp">
+        <div>
+          <p class="eyebrow">MCP-native</p>
+          <h2>Use Argus with the agent you already like.</h2>
+          <p>
+            Run Argus as an MCP server and expose a conservative verification tool
+            to Claude Code, Cursor, Codex, or any MCP-capable workflow.
+          </p>
+        </div>
+        <pre><code>{
+  "mcpServers": {
+    "argus": {
+      "command": "argus",
+      "args": ["mcp-serve", "--workspace", "/path/to/repo"]
+    }
+  }
+}</code></pre>
+      </section>
+
+      <section class="metrics" aria-label="Release proof">
+        <div>
+          <strong>v0.1.1</strong>
+          <span>Published with checksum release archives.</span>
+        </div>
+        <div>
+          <strong>15/15</strong>
+          <span>DeepSeek v4 pro benchmark attempts passed with the gate on.</span>
+        </div>
+        <div>
+          <strong>MCP</strong>
+          <span>Default server exposure is verify-only; broader tools are opt-in.</span>
+        </div>
+      </section>
+
+      <section class="final-cta">
+        <h2>Stop hoping your agent checked. Make it prove it.</h2>
+        <div class="hero-actions" aria-label="Final actions">
+          <a class="button primary" href="https://github.com/YOMXXX/argus">Open GitHub</a>
+          <a class="button secondary" href="https://github.com/YOMXXX/argus/tree/master/launch">Launch kit</a>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
