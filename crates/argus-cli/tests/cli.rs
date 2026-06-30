@@ -273,6 +273,72 @@ fn arguscode_task_queues_lists_and_resume_reports_latest_task() {
 }
 
 #[test]
+fn arguscode_resume_run_executes_latest_task_and_updates_status() {
+    let dir = std::env::temp_dir().join(format!("arguscode-resume-run-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("package.json"),
+        "{\"scripts\":{\"test\":\"echo ok\"}}\n",
+    )
+    .unwrap();
+
+    let queue = Command::new(arguscode_bin())
+        .args(["task", "wire the task into the harness"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(queue.status.success(), "arguscode task failed: {queue:?}");
+
+    let resume = Command::new(arguscode_bin())
+        .args(["resume", "--run"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        resume.status.success(),
+        "arguscode resume --run failed: {resume:?}"
+    );
+    let stdout = String::from_utf8_lossy(&resume.stdout);
+    assert!(
+        stdout.contains("Running task through Argus harness"),
+        "stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("wire the task into the harness"),
+        "stdout: {stdout}"
+    );
+    assert!(stdout.contains("status: done"), "stdout: {stdout}");
+
+    let queue = std::fs::read_to_string(dir.join(".argus/tasks/queue.jsonl")).unwrap();
+    assert!(queue.contains("\"status\":\"done\""), "{queue}");
+
+    let traces = std::fs::read_dir(dir.join(".argus/tasks"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|s| s.to_str()) == Some("jsonl"))
+        .filter(|path| path.file_name().and_then(|s| s.to_str()) != Some("queue.jsonl"))
+        .collect::<Vec<_>>();
+    assert_eq!(traces.len(), 1, "traces: {traces:?}");
+
+    let show = Command::new(bin())
+        .args(["trace", "show"])
+        .arg(&traces[0])
+        .output()
+        .unwrap();
+    assert!(show.status.success(), "trace show failed: {show:?}");
+    let show_out = String::from_utf8_lossy(&show.stdout);
+    assert!(show_out.contains("TASK"), "show: {show_out}");
+    assert!(
+        show_out.contains("wire the task into the harness"),
+        "show: {show_out}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn fork_reruns_task_from_trace() {
     let dir = std::env::temp_dir().join(format!("argus-fork-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

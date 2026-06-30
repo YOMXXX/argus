@@ -124,6 +124,7 @@ arguscode init
 # Queue work for the Workbench and resume the latest queued task.
 arguscode task "fix the failing parser test"
 arguscode resume
+arguscode resume --run
 
 # The money shot: gate catches fake done, the agent fixes, trace records it.
 argus demo

@@ -39,6 +39,22 @@ pub fn queue_task(root: &Path, text: &str) -> Result<TaskRecord> {
     Ok(record)
 }
 
+pub fn update_task_status(root: &Path, id: &str, status: &str) -> Result<Option<TaskRecord>> {
+    let mut tasks = list_tasks(root)?;
+    let mut updated = None;
+    for task in &mut tasks {
+        if task.id == id {
+            task.status = status.to_string();
+            updated = Some(task.clone());
+            break;
+        }
+    }
+    if updated.is_some() {
+        write_tasks(root, &tasks)?;
+    }
+    Ok(updated)
+}
+
 pub fn list_tasks(root: &Path) -> Result<Vec<TaskRecord>> {
     let path = task_queue_path(root);
     if !path.exists() {
@@ -64,6 +80,29 @@ pub fn list_tasks(root: &Path) -> Result<Vec<TaskRecord>> {
 
 pub fn latest_task(root: &Path) -> Result<Option<TaskRecord>> {
     Ok(list_tasks(root)?.into_iter().last())
+}
+
+pub fn latest_resumable_task(root: &Path) -> Result<Option<TaskRecord>> {
+    Ok(list_tasks(root)?
+        .into_iter()
+        .rev()
+        .find(|task| task.status != "done"))
+}
+
+fn write_tasks(root: &Path, tasks: &[TaskRecord]) -> Result<()> {
+    let path = task_queue_path(root);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)?;
+    for task in tasks {
+        writeln!(file, "{}", serde_json::to_string(task)?)?;
+    }
+    Ok(())
 }
 
 fn now_ms() -> u128 {
@@ -100,6 +139,34 @@ mod tests {
         assert_eq!(tasks.len(), 2);
         assert_eq!(tasks[0], first);
         assert_eq!(latest_task(&dir).unwrap(), Some(second));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn update_status_rewrites_matching_task() {
+        let dir = temp_dir("status");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let task = queue_task(&dir, "ship status").unwrap();
+        let updated = update_task_status(&dir, &task.id, "done").unwrap();
+
+        assert_eq!(updated.as_ref().unwrap().status, "done");
+        assert_eq!(list_tasks(&dir).unwrap()[0].status, "done");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn latest_resumable_skips_done_tasks() {
+        let dir = temp_dir("resumable");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let older = queue_task(&dir, "still queued").unwrap();
+        let newer = queue_task(&dir, "already done").unwrap();
+        update_task_status(&dir, &newer.id, "done").unwrap();
+
+        assert_eq!(latest_resumable_task(&dir).unwrap(), Some(older));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

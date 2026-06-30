@@ -1,9 +1,12 @@
 use anyhow::Result;
 use argus_cli::project::{detect_project, init_project, init_report_text};
-use argus_cli::tasks::{latest_task, list_tasks, queue_task};
+use argus_cli::tasks::{
+    latest_resumable_task, list_tasks, queue_task, update_task_status, TaskRecord,
+};
 use argus_cli::workbench::{ensure_config, run_workbench};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use std::process::Command;
 
 #[derive(Parser)]
 #[command(
@@ -42,7 +45,11 @@ enum Commands {
         task: Option<String>,
     },
     /// Resume the latest queued task.
-    Resume,
+    Resume {
+        /// Execute the task through the Argus harness and write a trace.
+        #[arg(long)]
+        run: bool,
+    },
     /// Check local project readiness for ArgusCode.
     Doctor,
 }
@@ -63,7 +70,7 @@ fn main() -> Result<()> {
         Commands::Workbench => run_workbench(&cwd),
         Commands::Chat { task } => chat(&cwd, task),
         Commands::Task { task } => task_command(&cwd, task),
-        Commands::Resume => resume(&cwd),
+        Commands::Resume { run } => resume(&cwd, run),
         Commands::Doctor => doctor(&cwd),
     }
 }
@@ -100,13 +107,18 @@ fn task_command(cwd: &std::path::Path, task: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn resume(cwd: &std::path::Path) -> Result<()> {
+fn resume(cwd: &std::path::Path, run: bool) -> Result<()> {
     let (profile, _) = ensure_config(cwd)?;
-    match latest_task(&profile.root)? {
+    match latest_resumable_task(&profile.root)? {
         Some(record) => {
             println!("Resuming task {}: {}", record.id, record.text);
             println!("status: {}", record.status);
-            println!("Open the TUI with: arguscode");
+            if run {
+                run_task_through_harness(&profile.root, &record)?;
+            } else {
+                println!("Open the TUI with: arguscode");
+                println!("Run it through the harness with: arguscode resume --run");
+            }
         }
         None => {
             println!("No resumable task found.");
@@ -114,6 +126,54 @@ fn resume(cwd: &std::path::Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn run_task_through_harness(root: &std::path::Path, record: &TaskRecord) -> Result<()> {
+    let (_, config) = ensure_config(root)?;
+    update_task_status(root, &record.id, "running")?;
+    let trace = PathBuf::from(".argus/tasks").join(format!("{}.trace.jsonl", record.id));
+
+    println!("Running task through Argus harness: {}", record.text);
+    let mut command = Command::new(argus_binary_path()?);
+    command
+        .current_dir(root)
+        .arg("run")
+        .arg(&record.text)
+        .arg("--provider")
+        .arg(&config.provider.default_provider)
+        .arg("--model")
+        .arg(&config.provider.default_model)
+        .arg("--yes")
+        .arg("--trace")
+        .arg(&trace);
+    for verify in &config.verify.commands {
+        command.arg("--verify").arg(verify);
+    }
+
+    let output = command.output()?;
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    eprint!("{}", String::from_utf8_lossy(&output.stderr));
+
+    if output.status.success() {
+        update_task_status(root, &record.id, "done")?;
+        println!("status: done");
+        println!("trace: {}", trace.display());
+        Ok(())
+    } else {
+        update_task_status(root, &record.id, "failed")?;
+        anyhow::bail!("Argus harness failed with {}", output.status)
+    }
+}
+
+fn argus_binary_path() -> Result<PathBuf> {
+    let exe = std::env::current_exe()?;
+    let binary_name = if cfg!(windows) { "argus.exe" } else { "argus" };
+    let sibling = exe.with_file_name(binary_name);
+    if sibling.exists() {
+        Ok(sibling)
+    } else {
+        Ok(PathBuf::from(binary_name))
+    }
 }
 
 fn status(cwd: &std::path::Path) -> Result<()> {
