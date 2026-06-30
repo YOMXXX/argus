@@ -2,6 +2,7 @@ use crate::config::{ArgusCodeConfig, CONFIG_PATH};
 use crate::diff::load_diff_preview;
 use crate::harness::{run_task_through_harness, HarnessRunOutput};
 use crate::project::{detect_project, init_project, ProjectProfile};
+use crate::repo_map::load_repo_map;
 use crate::sessions::{list_sessions, SessionRecord};
 use crate::tasks::{latest_resumable_task, list_tasks, queue_task, update_task_status, TaskRecord};
 use crate::trace_view::{load_trace_preview, TracePreview};
@@ -101,6 +102,7 @@ pub struct WorkbenchApp {
     pub session_history: Vec<SessionRecord>,
     pub diff_preview: String,
     pub trace_preview: TracePreview,
+    pub repo_map: String,
     pub terminal_log: Vec<String>,
     pub latest_trace_path: Option<PathBuf>,
     pub input: String,
@@ -116,6 +118,7 @@ impl WorkbenchApp {
             Vec::new(),
             "(not loaded)".into(),
             TracePreview::empty(),
+            "(not loaded)".into(),
         )
     }
 
@@ -125,6 +128,7 @@ impl WorkbenchApp {
         let diff_preview = load_diff_preview(&profile.root)?;
         let latest_trace_path = session_history.last().map(|session| session.trace.clone());
         let trace_preview = load_trace_preview(&profile.root, latest_trace_path.as_deref());
+        let repo_map = load_repo_map(&profile.root, &profile, &config)?;
         Ok(Self::with_state(
             profile,
             config,
@@ -132,6 +136,7 @@ impl WorkbenchApp {
             session_history,
             diff_preview,
             trace_preview,
+            repo_map,
         ))
     }
 
@@ -142,6 +147,7 @@ impl WorkbenchApp {
         session_history: Vec<SessionRecord>,
         diff_preview: String,
         trace_preview: TracePreview,
+        repo_map: String,
     ) -> Self {
         let latest_trace_path = session_history.last().map(|session| session.trace.clone());
         Self {
@@ -154,6 +160,7 @@ impl WorkbenchApp {
             session_history,
             diff_preview,
             trace_preview,
+            repo_map,
             terminal_log: Vec::new(),
             latest_trace_path,
             input: String::new(),
@@ -281,6 +288,7 @@ impl WorkbenchApp {
                 }
             }
             "/diff" => self.refresh_diff_preview(),
+            "/map" => self.refresh_repo_map(),
             "/tasks" => self.show_task_queue(),
             "/cancel" => self.update_task_status_from_command(
                 args.first().copied(),
@@ -400,6 +408,19 @@ impl WorkbenchApp {
             }
             Err(err) => {
                 self.status = format!("Could not read task queue: {err}");
+            }
+        }
+    }
+
+    fn refresh_repo_map(&mut self) {
+        self.active_pane = WorkbenchPane::Project;
+        match load_repo_map(&self.profile.root, &self.profile, &self.config) {
+            Ok(map) => {
+                self.repo_map = map;
+                self.status = "Repo map refreshed.".into();
+            }
+            Err(err) => {
+                self.status = format!("Could not refresh repo map: {err}");
             }
         }
     }
@@ -830,6 +851,10 @@ fn render_project(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
             items.push(ListItem::new(format!("• {}", path.display())));
         }
     }
+    items.push(ListItem::new(""));
+    for line in app.repo_map.lines().take(16) {
+        items.push(ListItem::new(line.to_string()));
+    }
     f.render_widget(
         List::new(items).block(panel_block(
             "Project",
@@ -996,6 +1021,7 @@ plan -> edit -> verify -> repair -> trace\n\n\
 Slash commands\n\
 /verify  Run verification gate\n\
 /run     Run latest queued task\n\
+/map     Refresh repo map\n\
 /tasks   Show task queue\n\
 /cancel  Cancel a task by id\n\
 /retry   Requeue a task by id\n\
@@ -1498,6 +1524,61 @@ mod tests {
         assert!(app.status.contains("Approval updated"), "{}", app.status);
         let saved = ArgusCodeConfig::read(&dir).unwrap();
         assert_eq!(saved.security.approval, "ask");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workbench_loads_and_renders_repo_map() {
+        let dir = temp_dir("repo-map");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn demo() {}\n").unwrap();
+        std::fs::write(dir.join("AGENTS.md"), "# Rules\n").unwrap();
+        let seed = app_with_root(dir.clone());
+
+        let app = WorkbenchApp::load(seed.profile, seed.config).unwrap();
+
+        assert!(app.repo_map.contains("Repo Map"), "{}", app.repo_map);
+        assert!(app.repo_map.contains("src"), "{}", app.repo_map);
+        assert!(app.repo_map.contains("rs"), "{}", app.repo_map);
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 36)).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("Repo Map"), "{text}");
+        assert!(text.contains("src"), "{text}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_map_refreshes_repo_map_without_queueing_task() {
+        let dir = temp_dir("slash-map");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        let seed = app_with_root(dir.clone());
+        let mut app = WorkbenchApp::load(seed.profile, seed.config).unwrap();
+        app.repo_map = "stale".into();
+        std::fs::create_dir_all(dir.join("tests")).unwrap();
+        std::fs::write(dir.join("tests/smoke.rs"), "#[test] fn smoke() {}\n").unwrap();
+
+        for c in "/map".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert!(app.task_queue.is_empty(), "{:?}", app.task_queue);
+        assert!(list_tasks(&dir).unwrap().is_empty());
+        assert_eq!(app.active_pane, WorkbenchPane::Project);
+        assert!(app.status.contains("Repo map refreshed"), "{}", app.status);
+        assert!(app.repo_map.contains("tests"), "{}", app.repo_map);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

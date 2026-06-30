@@ -30,6 +30,7 @@ Primary proof:
 - The Workbench can update provider/model profiles from slash commands and persist them to `.argus/config.toml`.
 - The Workbench can list, cancel, and requeue tasks from slash commands without leaving the TUI.
 - The Workbench can tune sandbox and approval profiles from slash commands, and harness runs pass those settings to `argus run`.
+- The Workbench renders a repo map and can refresh codebase shape from `/map`.
 - `argus demo` shows the verification gate catching a bad result and forcing a fix.
 - `argus trace show` exposes the black-box timeline.
 - `argus mcp-serve` gives existing agents a verification tool without switching workflows.

@@ -2,6 +2,7 @@ pub mod config;
 pub mod diff;
 pub mod harness;
 pub mod project;
+pub mod repo_map;
 pub mod sessions;
 pub mod tasks;
 pub mod trace_view;
