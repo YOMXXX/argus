@@ -65,9 +65,13 @@ fn build_argus_run_command(
         .arg(&config.provider.default_provider)
         .arg("--model")
         .arg(&config.provider.default_model)
-        .arg("--yes")
+        .arg("--sandbox")
+        .arg(&config.security.sandbox)
         .arg("--trace")
         .arg(trace);
+    if config.security.approval == "auto" {
+        command.arg("--yes");
+    }
     if let Some(base_url) = &config.provider.base_url {
         command.arg("--base-url").arg(base_url);
     }
@@ -97,8 +101,8 @@ pub fn argus_binary_path() -> Result<PathBuf> {
 mod tests {
     use super::*;
     use crate::config::{
-        ArgusCodeConfig, MemoryConfig, ProjectConfig, ProviderConfig, RulesConfig, UiConfig,
-        VerifyConfig,
+        ArgusCodeConfig, MemoryConfig, ProjectConfig, ProviderConfig, RulesConfig, SecurityConfig,
+        UiConfig, VerifyConfig,
     };
 
     #[test]
@@ -119,6 +123,7 @@ mod tests {
                 base_url: Some("https://api.deepseek.com".into()),
                 api_key_env: Some("ARGUS_TEST_PROVIDER_KEY".into()),
             },
+            security: SecurityConfig::default(),
             verify: VerifyConfig {
                 commands: vec!["cargo test".into()],
                 gate: true,
@@ -176,5 +181,83 @@ mod tests {
             "{envs:?}"
         );
         std::env::remove_var("ARGUS_TEST_PROVIDER_KEY");
+    }
+
+    #[test]
+    fn security_config_maps_to_argus_run_sandbox_and_approval_args() {
+        let mut config = ArgusCodeConfig {
+            schema_version: 1,
+            project: ProjectConfig {
+                name: "demo".into(),
+                root: ".".into(),
+                languages: vec!["rust".into()],
+                package_manager: Some("cargo".into()),
+            },
+            provider: ProviderConfig {
+                default_provider: "mock".into(),
+                default_model: "mock".into(),
+                routing: "manual".into(),
+                base_url: None,
+                api_key_env: None,
+            },
+            security: SecurityConfig {
+                sandbox: "read-only".into(),
+                approval: "ask".into(),
+            },
+            verify: VerifyConfig {
+                commands: vec![],
+                gate: true,
+            },
+            rules: RulesConfig { imported: vec![] },
+            memory: MemoryConfig {
+                project: ".argus/memory/project.md".into(),
+                lessons: ".argus/memory/lessons.md".into(),
+            },
+            ui: UiConfig {
+                default_view: "workbench".into(),
+                theme: "nocturne".into(),
+            },
+        };
+        let record = TaskRecord {
+            id: "task-1".into(),
+            text: "inspect only".into(),
+            status: "queued".into(),
+            created_ms: 1,
+        };
+
+        let command = build_argus_run_command(
+            Path::new("argus"),
+            Path::new("/tmp/demo"),
+            &config,
+            &record,
+            Path::new(".argus/tasks/task-1.trace.jsonl"),
+        );
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--sandbox", "read-only"]),
+            "{args:?}"
+        );
+        assert!(
+            !args.iter().any(|arg| arg == "--yes"),
+            "ask approval should not auto-approve: {args:?}"
+        );
+
+        config.security.approval = "auto".into();
+        let command = build_argus_run_command(
+            Path::new("argus"),
+            Path::new("/tmp/demo"),
+            &config,
+            &record,
+            Path::new(".argus/tasks/task-1.trace.jsonl"),
+        );
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert!(args.iter().any(|arg| arg == "--yes"), "{args:?}");
     }
 }

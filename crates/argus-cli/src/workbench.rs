@@ -305,6 +305,8 @@ impl WorkbenchApp {
                 self.active_pane = WorkbenchPane::Trace;
                 self.status = format!("Memory opened: {}", self.config.memory.project);
             }
+            "/sandbox" => self.update_sandbox_profile(args.first().copied()),
+            "/approval" => self.update_approval_profile(args.first().copied()),
             "/model" | "/provider" => {
                 if command == "/model" {
                     self.update_model(args.first().copied());
@@ -330,6 +332,54 @@ impl WorkbenchApp {
                 );
             }
         }
+    }
+
+    fn update_sandbox_profile(&mut self, sandbox: Option<&str>) {
+        let Some(sandbox) = sandbox else {
+            self.show_security_profile("Security profile shown.");
+            return;
+        };
+        if !matches!(sandbox, "workspace-write" | "read-only" | "trusted") {
+            self.status = "Unknown sandbox. Try workspace-write, read-only, or trusted.".into();
+            return;
+        }
+        self.config.security.sandbox = sandbox.to_string();
+        self.persist_security_profile("Sandbox updated");
+    }
+
+    fn update_approval_profile(&mut self, approval: Option<&str>) {
+        let Some(approval) = approval else {
+            self.show_security_profile("Security profile shown.");
+            return;
+        };
+        if !matches!(approval, "auto" | "ask") {
+            self.status = "Unknown approval profile. Try auto or ask.".into();
+            return;
+        }
+        self.config.security.approval = approval.to_string();
+        self.persist_security_profile("Approval updated");
+    }
+
+    fn persist_security_profile(&mut self, label: &str) {
+        match self.config.write(&self.profile.root) {
+            Ok(_) => self.show_security_profile(label),
+            Err(err) => {
+                self.active_pane = WorkbenchPane::Terminal;
+                self.status = format!("Could not write security profile: {err}");
+            }
+        }
+    }
+
+    fn show_security_profile(&mut self, status: &str) {
+        self.active_pane = WorkbenchPane::Terminal;
+        self.terminal_log = vec![
+            format!("sandbox: {}", self.config.security.sandbox),
+            format!("approval: {}", self.config.security.approval),
+        ];
+        self.status = format!(
+            "{status}: sandbox={}, approval={}",
+            self.config.security.sandbox, self.config.security.approval
+        );
     }
 
     fn show_task_queue(&mut self) {
@@ -724,6 +774,16 @@ fn render_header(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
                 Color::Yellow
             }),
         ),
+        Span::raw(" | sandbox: "),
+        Span::styled(
+            &app.config.security.sandbox,
+            Style::default().fg(Color::Blue),
+        ),
+        Span::raw(" | approval: "),
+        Span::styled(
+            &app.config.security.approval,
+            Style::default().fg(Color::Magenta),
+        ),
         Span::raw(" | harness: live"),
     ]);
     f.render_widget(
@@ -942,7 +1002,9 @@ Slash commands\n\
 /diff    Refresh diff preview\n\
 /history Open session history\n\
 /model   Set or show current model\n\
-/provider Set or show provider profile";
+/provider Set or show provider profile\n\
+/sandbox Set or show sandbox profile\n\
+/approval Set or show approval profile";
     f.render_widget(
         Paragraph::new(text)
             .block(
@@ -1398,6 +1460,44 @@ mod tests {
         assert_eq!(app.task_queue[0].status, "queued");
         assert_eq!(list_tasks(&dir).unwrap()[0].status, "queued");
         assert!(app.status.contains("Task requeued"), "{}", app.status);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_sandbox_updates_security_profile_and_writes_config() {
+        let dir = temp_dir("slash-sandbox");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = app_with_root(dir.clone());
+
+        for c in "/sandbox read-only".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert_eq!(app.config.security.sandbox, "read-only");
+        assert!(app.status.contains("Sandbox updated"), "{}", app.status);
+        let saved = ArgusCodeConfig::read(&dir).unwrap();
+        assert_eq!(saved.security.sandbox, "read-only");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_approval_updates_security_profile_and_writes_config() {
+        let dir = temp_dir("slash-approval");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = app_with_root(dir.clone());
+
+        for c in "/approval ask".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert_eq!(app.config.security.approval, "ask");
+        assert!(app.status.contains("Approval updated"), "{}", app.status);
+        let saved = ArgusCodeConfig::read(&dir).unwrap();
+        assert_eq!(saved.security.approval, "ask");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

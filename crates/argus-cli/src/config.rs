@@ -12,6 +12,8 @@ pub struct ArgusCodeConfig {
     pub schema_version: u32,
     pub project: ProjectConfig,
     pub provider: ProviderConfig,
+    #[serde(default)]
+    pub security: SecurityConfig,
     pub verify: VerifyConfig,
     pub rules: RulesConfig,
     pub memory: MemoryConfig,
@@ -35,6 +37,21 @@ pub struct ProviderConfig {
     pub base_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key_env: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecurityConfig {
+    pub sandbox: String,
+    pub approval: String,
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            sandbox: "workspace-write".into(),
+            approval: "auto".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -105,6 +122,7 @@ mod tests {
                 base_url: None,
                 api_key_env: None,
             },
+            security: SecurityConfig::default(),
             verify: VerifyConfig {
                 commands: vec!["cargo test".into()],
                 gate: true,
@@ -125,5 +143,43 @@ mod tests {
         let text = toml::to_string(&cfg).unwrap();
         let parsed: ArgusCodeConfig = toml::from_str(&text).unwrap();
         assert_eq!(parsed, cfg);
+    }
+
+    #[test]
+    fn config_defaults_security_for_existing_files() {
+        let text = r#"
+schema_version = 1
+
+[project]
+name = "demo"
+root = "."
+languages = ["rust"]
+package_manager = "cargo"
+
+[provider]
+default_provider = "mock"
+default_model = "mock"
+routing = "manual"
+
+[verify]
+commands = ["cargo test"]
+gate = true
+
+[rules]
+imported = []
+
+[memory]
+project = ".argus/memory/project.md"
+lessons = ".argus/memory/lessons.md"
+
+[ui]
+default_view = "workbench"
+theme = "nocturne"
+"#;
+
+        let parsed: ArgusCodeConfig = toml::from_str(text).unwrap();
+
+        assert_eq!(parsed.security.sandbox, "workspace-write");
+        assert_eq!(parsed.security.approval, "auto");
     }
 }

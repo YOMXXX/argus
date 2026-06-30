@@ -311,6 +311,8 @@ fn status(cwd: &std::path::Path) -> Result<()> {
     if let Some(api_key_env) = &config.provider.api_key_env {
         println!("api key env: {api_key_env}");
     }
+    println!("sandbox: {}", config.security.sandbox);
+    println!("approval: {}", config.security.approval);
     println!("gate: {}", if config.verify.gate { "on" } else { "off" });
     println!("verify:");
     for command in &config.verify.commands {

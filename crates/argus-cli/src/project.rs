@@ -1,6 +1,6 @@
 use crate::config::{
-    ArgusCodeConfig, MemoryConfig, ProjectConfig, ProviderConfig, RulesConfig, UiConfig,
-    VerifyConfig, ARGUS_DIR, PROJECT_MEMORY_PATH, SMOKE_EVAL_PATH,
+    ArgusCodeConfig, MemoryConfig, ProjectConfig, ProviderConfig, RulesConfig, SecurityConfig,
+    UiConfig, VerifyConfig, ARGUS_DIR, PROJECT_MEMORY_PATH, SMOKE_EVAL_PATH,
 };
 use anyhow::Result;
 use std::collections::BTreeSet;
@@ -175,6 +175,7 @@ pub fn build_config(profile: &ProjectProfile) -> ArgusCodeConfig {
             base_url: None,
             api_key_env: None,
         },
+        security: SecurityConfig::default(),
         verify: VerifyConfig {
             commands: profile.verify_commands.clone(),
             gate: true,
