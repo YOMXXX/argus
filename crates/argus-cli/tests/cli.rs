@@ -223,6 +223,56 @@ fn arguscode_status_auto_initializes_and_reports_project() {
 }
 
 #[test]
+fn arguscode_task_queues_lists_and_resume_reports_latest_task() {
+    let dir = std::env::temp_dir().join(format!("arguscode-task-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("package.json"),
+        "{\"scripts\":{\"test\":\"echo ok\"}}\n",
+    )
+    .unwrap();
+
+    let queue = Command::new(arguscode_bin())
+        .args(["task", "fix the parser tests"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(queue.status.success(), "arguscode task failed: {queue:?}");
+    let stdout = String::from_utf8_lossy(&queue.stdout);
+    assert!(stdout.contains("Queued task"), "stdout: {stdout}");
+    assert!(dir.join(".argus/tasks/queue.jsonl").exists());
+
+    let list = Command::new(arguscode_bin())
+        .arg("task")
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        list.status.success(),
+        "arguscode task list failed: {list:?}"
+    );
+    let stdout = String::from_utf8_lossy(&list.stdout);
+    assert!(stdout.contains("fix the parser tests"), "stdout: {stdout}");
+    assert!(stdout.contains("queued"), "stdout: {stdout}");
+
+    let resume = Command::new(arguscode_bin())
+        .arg("resume")
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(
+        resume.status.success(),
+        "arguscode resume failed: {resume:?}"
+    );
+    let stdout = String::from_utf8_lossy(&resume.stdout);
+    assert!(stdout.contains("Resuming task"), "stdout: {stdout}");
+    assert!(stdout.contains("fix the parser tests"), "stdout: {stdout}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn fork_reruns_task_from_trace() {
     let dir = std::env::temp_dir().join(format!("argus-fork-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

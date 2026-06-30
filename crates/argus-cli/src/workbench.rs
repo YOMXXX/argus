@@ -1,7 +1,7 @@
 use crate::config::{ArgusCodeConfig, CONFIG_PATH};
 use crate::project::{detect_project, init_project, ProjectProfile};
 use anyhow::Result;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -9,7 +9,7 @@ use ratatui::crossterm::terminal::{
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::{backend::CrosstermBackend, Frame, Terminal};
 use std::path::{Path, PathBuf};
 
@@ -21,11 +21,58 @@ pub enum WorkbenchPane {
     Terminal,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkbenchMode {
+    Normal,
+    CommandPalette,
+    Help,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PaletteAction {
+    Verify,
+    Memory,
+    SmokeEval,
+    NewTask,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PaletteItem {
+    action: PaletteAction,
+    label: &'static str,
+    detail: &'static str,
+}
+
+const PALETTE_ITEMS: &[PaletteItem] = &[
+    PaletteItem {
+        action: PaletteAction::Verify,
+        label: "Run verification gate",
+        detail: "Focus Terminal / Verify and prepare configured commands",
+    },
+    PaletteItem {
+        action: PaletteAction::Memory,
+        label: "Open project memory",
+        detail: "Focus Trace / Memory and show durable project context",
+    },
+    PaletteItem {
+        action: PaletteAction::SmokeEval,
+        label: "Open smoke eval",
+        detail: "Prepare the generated .argus/evals/smoke.json suite",
+    },
+    PaletteItem {
+        action: PaletteAction::NewTask,
+        label: "New coding task",
+        detail: "Focus the conversation input",
+    },
+];
+
 #[derive(Debug, Clone)]
 pub struct WorkbenchApp {
     pub profile: ProjectProfile,
     pub config: ArgusCodeConfig,
     pub active_pane: WorkbenchPane,
+    pub mode: WorkbenchMode,
+    pub palette_selected: usize,
     pub input: String,
     pub status: String,
 }
@@ -36,9 +83,10 @@ impl WorkbenchApp {
             profile,
             config,
             active_pane: WorkbenchPane::Session,
+            mode: WorkbenchMode::Normal,
+            palette_selected: 0,
             input: String::new(),
-            status: "Ready. Type a task, Tab switches panes, Ctrl+K opens command palette soon."
-                .into(),
+            status: "Ready. Type a task, Tab switches panes, Ctrl+K opens command palette.".into(),
         }
     }
 
@@ -70,6 +118,93 @@ impl WorkbenchApp {
             self.input.clear();
         }
     }
+
+    fn open_palette(&mut self) {
+        self.mode = WorkbenchMode::CommandPalette;
+        self.palette_selected = 0;
+        self.status = "Command palette open. Up/Down select, Enter run, Esc close.".into();
+    }
+
+    fn close_overlay(&mut self) {
+        self.mode = WorkbenchMode::Normal;
+        self.status = "Ready.".into();
+    }
+
+    fn palette_next(&mut self) {
+        self.palette_selected = (self.palette_selected + 1) % PALETTE_ITEMS.len();
+    }
+
+    fn palette_prev(&mut self) {
+        self.palette_selected = if self.palette_selected == 0 {
+            PALETTE_ITEMS.len() - 1
+        } else {
+            self.palette_selected - 1
+        };
+    }
+
+    fn execute_palette_action(&mut self) {
+        let action = PALETTE_ITEMS[self.palette_selected].action;
+        self.mode = WorkbenchMode::Normal;
+        match action {
+            PaletteAction::Verify => {
+                self.active_pane = WorkbenchPane::Terminal;
+                let commands = if self.config.verify.commands.is_empty() {
+                    "no verify command configured".into()
+                } else {
+                    self.config.verify.commands.join(" && ")
+                };
+                self.status = format!("Ready to verify: {commands}");
+            }
+            PaletteAction::Memory => {
+                self.active_pane = WorkbenchPane::Trace;
+                self.status = format!("Memory opened: {}", self.config.memory.project);
+            }
+            PaletteAction::SmokeEval => {
+                self.active_pane = WorkbenchPane::Trace;
+                self.status = "Smoke eval ready: argus eval .argus/evals/smoke.json".into();
+            }
+            PaletteAction::NewTask => {
+                self.active_pane = WorkbenchPane::Session;
+                self.status = "New task ready. Type in the conversation input.".into();
+            }
+        }
+    }
+}
+
+pub fn handle_key(app: &mut WorkbenchApp, code: KeyCode, modifiers: KeyModifiers) -> bool {
+    match app.mode {
+        WorkbenchMode::Help => match code {
+            KeyCode::Esc | KeyCode::Char('?') => app.close_overlay(),
+            KeyCode::Char('q') if modifiers.is_empty() => return false,
+            _ => {}
+        },
+        WorkbenchMode::CommandPalette => match code {
+            KeyCode::Esc => app.close_overlay(),
+            KeyCode::Down | KeyCode::Char('j') => app.palette_next(),
+            KeyCode::Up | KeyCode::Char('k') if modifiers.is_empty() => app.palette_prev(),
+            KeyCode::Enter => app.execute_palette_action(),
+            KeyCode::Char('k') if modifiers.contains(KeyModifiers::CONTROL) => app.close_overlay(),
+            KeyCode::Char('q') if modifiers.is_empty() => return false,
+            _ => {}
+        },
+        WorkbenchMode::Normal => match code {
+            KeyCode::Char('q') if modifiers.is_empty() => return false,
+            KeyCode::Esc => return false,
+            KeyCode::Char('k') if modifiers.contains(KeyModifiers::CONTROL) => app.open_palette(),
+            KeyCode::Char('?') if modifiers.is_empty() => {
+                app.mode = WorkbenchMode::Help;
+                app.status = "Help open. Press ? or Esc to close.".into();
+            }
+            KeyCode::Tab => app.next_pane(),
+            KeyCode::Enter => app.submit_input(),
+            KeyCode::Backspace => app.pop_input(),
+            KeyCode::Char(c) if modifiers.is_empty() || modifiers == KeyModifiers::SHIFT => {
+                app.push_input(c);
+            }
+            _ => {}
+        },
+    }
+    true
 }
 
 pub fn ensure_config(root: &Path) -> Result<(ProjectProfile, ArgusCodeConfig)> {
@@ -108,12 +243,7 @@ fn event_loop(
         if let Event::Key(key) = event::read()? {
             if key.kind == KeyEventKind::Press {
                 match key.code {
-                    KeyCode::Char('q') if key.modifiers.is_empty() => break,
-                    KeyCode::Esc => break,
-                    KeyCode::Tab => app.next_pane(),
-                    KeyCode::Enter => app.submit_input(),
-                    KeyCode::Backspace => app.pop_input(),
-                    KeyCode::Char(c) => app.push_input(c),
+                    _ if !handle_key(app, key.code, key.modifiers) => break,
                     _ => {}
                 }
             }
@@ -149,6 +279,12 @@ pub fn ui(f: &mut Frame, app: &WorkbenchApp) {
     render_trace(f, app, body[2]);
     render_terminal(f, app, outer[2]);
     render_status(f, app, outer[3]);
+
+    match app.mode {
+        WorkbenchMode::CommandPalette => render_command_palette(f, app),
+        WorkbenchMode::Help => render_help(f),
+        WorkbenchMode::Normal => {}
+    }
 }
 
 fn render_header(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
@@ -315,6 +451,76 @@ fn render_status(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
     f.render_widget(Paragraph::new(status), area);
 }
 
+fn render_command_palette(f: &mut Frame, app: &WorkbenchApp) {
+    let area = centered_rect(66, 52, f.area());
+    f.render_widget(Clear, area);
+    let items = PALETTE_ITEMS
+        .iter()
+        .map(|item| ListItem::new(format!("{}  -  {}", item.label, item.detail)))
+        .collect::<Vec<_>>();
+    let mut state = ListState::default();
+    state.select(Some(app.palette_selected));
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .title("Command Palette"),
+        )
+        .highlight_style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
+    f.render_stateful_widget(list, area, &mut state);
+}
+
+fn render_help(f: &mut Frame) {
+    let area = centered_rect(62, 48, f.area());
+    f.render_widget(Clear, area);
+    let text = "ArgusCode Help\n\n\
+Ctrl+K  Open command palette\n\
+Tab     Switch pane\n\
+Enter   Queue task / run selected command\n\
+?       Toggle help\n\
+Esc     Close overlay or exit\n\
+q       Quit\n\n\
+Harness flow\n\
+plan -> edit -> verify -> repair -> trace";
+    f.render_widget(
+        Paragraph::new(text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title("ArgusCode Help"),
+            )
+            .wrap(Wrap { trim: false }),
+        area,
+    );
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(vertical[1])[1]
+}
+
 fn panel_block(title: &'static str, active: bool) -> Block<'static> {
     let style = if active {
         Style::default().fg(Color::Cyan)
@@ -332,6 +538,7 @@ mod tests {
     use super::*;
     use crate::project::build_config;
     use ratatui::backend::TestBackend;
+    use ratatui::crossterm::event::KeyModifiers;
 
     fn app() -> WorkbenchApp {
         let profile = ProjectProfile {
@@ -377,5 +584,60 @@ mod tests {
         assert!(text.contains("Trace"), "{text}");
         assert!(text.contains("Terminal"), "{text}");
         assert!(text.contains("cargo test"), "{text}");
+    }
+
+    #[test]
+    fn command_palette_opens_and_executes_verify_action() {
+        let mut app = app();
+
+        assert_eq!(app.mode, WorkbenchMode::Normal);
+        assert!(handle_key(
+            &mut app,
+            KeyCode::Char('k'),
+            KeyModifiers::CONTROL
+        ));
+        assert_eq!(app.mode, WorkbenchMode::CommandPalette);
+        assert!(app.status.contains("Command palette"), "{}", app.status);
+
+        assert!(handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty()));
+        assert_eq!(app.mode, WorkbenchMode::Normal);
+        assert_eq!(app.active_pane, WorkbenchPane::Terminal);
+        assert!(app.status.contains("Ready to verify"), "{}", app.status);
+    }
+
+    #[test]
+    fn command_palette_navigation_executes_memory_action() {
+        let mut app = app();
+
+        handle_key(&mut app, KeyCode::Char('k'), KeyModifiers::CONTROL);
+        handle_key(&mut app, KeyCode::Down, KeyModifiers::empty());
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert_eq!(app.active_pane, WorkbenchPane::Trace);
+        assert!(app.status.contains("Memory"), "{}", app.status);
+    }
+
+    #[test]
+    fn help_overlay_toggles_from_keyboard_and_renders_shortcuts() {
+        let mut app = app();
+
+        assert!(handle_key(
+            &mut app,
+            KeyCode::Char('?'),
+            KeyModifiers::empty()
+        ));
+        assert_eq!(app.mode, WorkbenchMode::Help);
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 32)).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("ArgusCode Help"), "{text}");
+        assert!(text.contains("Ctrl+K"), "{text}");
     }
 }

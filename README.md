@@ -120,6 +120,10 @@ arguscode
 # Generate config, project memory, and a smoke eval without opening the TUI.
 arguscode init
 
+# Queue work for the Workbench and resume the latest queued task.
+arguscode task "fix the failing parser test"
+arguscode resume
+
 # The money shot: gate catches fake done, the agent fixes, trace records it.
 argus demo
 

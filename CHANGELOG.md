@@ -8,6 +8,8 @@
 - Added project detection for Rust, Node, Python, and Go repositories.
 - Added project memory and smoke eval generation under `.argus/`.
 - Added the first ArgusCode Workbench TUI shell with project, session, trace/memory, and terminal/verify panes.
+- Added Workbench command palette (`Ctrl+K`) and help overlay (`?`) for keyboard-first operation.
+- Added `arguscode task` and `arguscode resume` with a local `.argus/tasks/queue.jsonl` task queue.
 - Updated release packaging and installer support so archives install both `argus` and `arguscode`.
 
 ## 0.1.1 - 2026-06-30
