@@ -14,6 +14,7 @@
 - Added `arguscode resume --run` to execute the latest queued task through the Argus harness and write a per-task trace.
 - Added `arguscode verify` to run the detected project verification gate directly from the ArgusCode entrypoint.
 - Added Workbench task execution state so the TUI can run the latest queued task, refresh queue status, and render harness output plus the latest trace path.
+- Added provider profile management with `arguscode provider deepseek`, OpenAI-compatible base URLs, and API-key environment variable mapping.
 - Updated release packaging and installer support so archives install both `argus` and `arguscode`.
 
 ## 0.1.1 - 2026-06-30

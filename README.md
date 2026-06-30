@@ -128,6 +128,9 @@ arguscode resume
 arguscode resume --run
 arguscode verify
 
+# Use an OpenAI-compatible provider profile without writing keys to config.
+arguscode provider deepseek --model deepseek-chat
+
 # The money shot: gate catches fake done, the agent fixes, trace records it.
 argus demo
 

@@ -31,6 +31,10 @@ pub struct ProviderConfig {
     pub default_provider: String,
     pub default_model: String,
     pub routing: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key_env: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -98,6 +102,8 @@ mod tests {
                 default_provider: "mock".into(),
                 default_model: "mock".into(),
                 routing: "manual".into(),
+                base_url: None,
+                api_key_env: None,
             },
             verify: VerifyConfig {
                 commands: vec!["cargo test".into()],

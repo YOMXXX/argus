@@ -21,6 +21,7 @@ Primary proof:
 - The Workbench command palette can run the latest queued task and show harness output plus the trace path.
 - `arguscode resume --run` executes the latest queued task through the Argus harness and writes a per-task trace.
 - `arguscode verify` runs the same detected verification gate without leaving the ArgusCode entrypoint.
+- `arguscode provider deepseek` configures an OpenAI-compatible model profile while keeping API keys in environment variables.
 - `argus demo` shows the verification gate catching a bad result and forcing a fix.
 - `argus trace show` exposes the black-box timeline.
 - `argus mcp-serve` gives existing agents a verification tool without switching workflows.

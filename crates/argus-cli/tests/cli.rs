@@ -248,6 +248,66 @@ fn arguscode_verify_runs_project_gate() {
 }
 
 #[test]
+fn arguscode_provider_deepseek_updates_openai_compatible_config() {
+    let dir = std::env::temp_dir().join(format!("arguscode-provider-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("package.json"),
+        "{\"scripts\":{\"test\":\"echo ok\"}}\n",
+    )
+    .unwrap();
+
+    let out = Command::new(arguscode_bin())
+        .args(["provider", "deepseek", "--model", "deepseek-chat"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "arguscode provider failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("provider: openai"), "stdout: {stdout}");
+    assert!(stdout.contains("model: deepseek-chat"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("api key env: DEEPSEEK_API_KEY"),
+        "stdout: {stdout}"
+    );
+
+    let config = std::fs::read_to_string(dir.join(".argus/config.toml")).unwrap();
+    assert!(config.contains("default_provider = \"openai\""), "{config}");
+    assert!(
+        config.contains("default_model = \"deepseek-chat\""),
+        "{config}"
+    );
+    assert!(
+        config.contains("base_url = \"https://api.deepseek.com\""),
+        "{config}"
+    );
+    assert!(
+        config.contains("api_key_env = \"DEEPSEEK_API_KEY\""),
+        "{config}"
+    );
+    assert!(!config.contains("sk-"), "{config}");
+
+    let status = Command::new(arguscode_bin())
+        .arg("status")
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(status.status.success(), "status failed: {status:?}");
+    let stdout = String::from_utf8_lossy(&status.stdout);
+    assert!(
+        stdout.contains("base url: https://api.deepseek.com"),
+        "stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("api key env: DEEPSEEK_API_KEY"),
+        "stdout: {stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn arguscode_task_queues_lists_and_resume_reports_latest_task() {
     let dir = std::env::temp_dir().join(format!("arguscode-task-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

@@ -172,6 +172,8 @@ pub fn build_config(profile: &ProjectProfile) -> ArgusCodeConfig {
             default_provider: "mock".into(),
             default_model: "mock".into(),
             routing: "manual".into(),
+            base_url: None,
+            api_key_env: None,
         },
         verify: VerifyConfig {
             commands: profile.verify_commands.clone(),

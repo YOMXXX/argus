@@ -51,8 +51,46 @@ enum Commands {
     },
     /// Run the configured project verification gate.
     Verify,
+    /// Show or update the default model/provider profile.
+    Provider {
+        #[command(subcommand)]
+        command: Option<ProviderCommands>,
+    },
     /// Check local project readiness for ArgusCode.
     Doctor,
+}
+
+#[derive(Subcommand)]
+enum ProviderCommands {
+    /// Use the built-in mock provider.
+    Mock,
+    /// Use OpenAI with OPENAI_API_KEY.
+    Openai {
+        /// Model name to use.
+        #[arg(long, default_value = "gpt-4o-mini")]
+        model: String,
+    },
+    /// Use DeepSeek through the OpenAI-compatible API.
+    Deepseek {
+        /// Model name to use.
+        #[arg(long, default_value = "deepseek-chat")]
+        model: String,
+    },
+    /// Use any OpenAI-compatible endpoint.
+    Custom {
+        /// Provider adapter name. Use `openai` for OpenAI-compatible APIs.
+        #[arg(long, default_value = "openai")]
+        provider: String,
+        /// Model name to use.
+        #[arg(long)]
+        model: String,
+        /// Base URL for the provider API.
+        #[arg(long = "base-url")]
+        base_url: Option<String>,
+        /// Environment variable that stores the API key.
+        #[arg(long = "api-key-env")]
+        api_key_env: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -74,6 +112,7 @@ async fn main() -> Result<()> {
         Commands::Task { task } => task_command(&cwd, task),
         Commands::Resume { run } => resume(&cwd, run),
         Commands::Verify => verify(&cwd).await,
+        Commands::Provider { command } => provider_command(&cwd, command),
         Commands::Doctor => doctor(&cwd),
     }
 }
@@ -163,6 +202,64 @@ async fn verify(cwd: &std::path::Path) -> Result<()> {
     }
 }
 
+fn provider_command(cwd: &std::path::Path, command: Option<ProviderCommands>) -> Result<()> {
+    let (profile, mut config) = ensure_config(cwd)?;
+    match command {
+        Some(ProviderCommands::Mock) => {
+            config.provider.default_provider = "mock".into();
+            config.provider.default_model = "mock".into();
+            config.provider.base_url = None;
+            config.provider.api_key_env = None;
+            config.provider.routing = "manual".into();
+            config.write(&profile.root)?;
+        }
+        Some(ProviderCommands::Openai { model }) => {
+            config.provider.default_provider = "openai".into();
+            config.provider.default_model = model;
+            config.provider.base_url = None;
+            config.provider.api_key_env = Some("OPENAI_API_KEY".into());
+            config.provider.routing = "manual".into();
+            config.write(&profile.root)?;
+        }
+        Some(ProviderCommands::Deepseek { model }) => {
+            config.provider.default_provider = "openai".into();
+            config.provider.default_model = model;
+            config.provider.base_url = Some("https://api.deepseek.com".into());
+            config.provider.api_key_env = Some("DEEPSEEK_API_KEY".into());
+            config.provider.routing = "manual".into();
+            config.write(&profile.root)?;
+        }
+        Some(ProviderCommands::Custom {
+            provider,
+            model,
+            base_url,
+            api_key_env,
+        }) => {
+            config.provider.default_provider = provider;
+            config.provider.default_model = model;
+            config.provider.base_url = base_url;
+            config.provider.api_key_env = api_key_env;
+            config.provider.routing = "manual".into();
+            config.write(&profile.root)?;
+        }
+        None => {}
+    }
+    print_provider(&config);
+    Ok(())
+}
+
+fn print_provider(config: &argus_cli::config::ArgusCodeConfig) {
+    println!("ArgusCode provider");
+    println!("provider: {}", config.provider.default_provider);
+    println!("model: {}", config.provider.default_model);
+    if let Some(base_url) = &config.provider.base_url {
+        println!("base url: {base_url}");
+    }
+    if let Some(api_key_env) = &config.provider.api_key_env {
+        println!("api key env: {api_key_env}");
+    }
+}
+
 fn status(cwd: &std::path::Path) -> Result<()> {
     let (profile, config) = ensure_config(cwd)?;
     println!("ArgusCode status");
@@ -184,6 +281,12 @@ fn status(cwd: &std::path::Path) -> Result<()> {
         "provider: {}/{}",
         config.provider.default_provider, config.provider.default_model
     );
+    if let Some(base_url) = &config.provider.base_url {
+        println!("base url: {base_url}");
+    }
+    if let Some(api_key_env) = &config.provider.api_key_env {
+        println!("api key env: {api_key_env}");
+    }
     println!("gate: {}", if config.verify.gate { "on" } else { "off" });
     println!("verify:");
     for command in &config.verify.commands {
