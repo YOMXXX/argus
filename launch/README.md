@@ -23,7 +23,7 @@ Primary proof:
 - `arguscode verify` runs the same detected verification gate without leaving the ArgusCode entrypoint.
 - `arguscode provider deepseek` configures an OpenAI-compatible model profile while keeping API keys in environment variables.
 - `arguscode history` lists completed task sessions from `.argus/sessions/history.jsonl`.
-- The Workbench Trace panel renders recent session history and the latest task trace path.
+- The Workbench Trace panel renders recent session history and the latest task trace timeline.
 - The Workbench Session panel renders git status/diff preview and can refresh it from the command palette.
 - `argus demo` shows the verification gate catching a bad result and forcing a fix.
 - `argus trace show` exposes the black-box timeline.

@@ -118,7 +118,7 @@ ArgusCode ships a built-in **mock provider**, so you can see the workbench and t
 arguscode
 # Inside the TUI, type a task and press Enter to persist it to the local queue.
 # Press Ctrl+K, then run the latest queued task through the harness.
-# The Trace panel shows recent session history and the latest task trace path.
+# The Trace panel shows recent session history and the latest task trace timeline.
 # The session panel shows git status/diff preview and can refresh it from Ctrl+K.
 
 # Generate config, project memory, and a smoke eval without opening the TUI.

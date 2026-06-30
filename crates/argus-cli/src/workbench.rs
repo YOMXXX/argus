@@ -4,6 +4,7 @@ use crate::harness::{run_task_through_harness, HarnessRunOutput};
 use crate::project::{detect_project, init_project, ProjectProfile};
 use crate::sessions::{list_sessions, SessionRecord};
 use crate::tasks::{latest_resumable_task, list_tasks, queue_task, TaskRecord};
+use crate::trace_view::{load_trace_preview, TracePreview};
 use anyhow::Result;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::crossterm::execute;
@@ -98,6 +99,7 @@ pub struct WorkbenchApp {
     pub task_queue: Vec<TaskRecord>,
     pub session_history: Vec<SessionRecord>,
     pub diff_preview: String,
+    pub trace_preview: TracePreview,
     pub terminal_log: Vec<String>,
     pub latest_trace_path: Option<PathBuf>,
     pub input: String,
@@ -112,6 +114,7 @@ impl WorkbenchApp {
             Vec::new(),
             Vec::new(),
             "(not loaded)".into(),
+            TracePreview::empty(),
         )
     }
 
@@ -119,12 +122,15 @@ impl WorkbenchApp {
         let task_queue = list_tasks(&profile.root)?;
         let session_history = list_sessions(&profile.root)?;
         let diff_preview = load_diff_preview(&profile.root)?;
+        let latest_trace_path = session_history.last().map(|session| session.trace.clone());
+        let trace_preview = load_trace_preview(&profile.root, latest_trace_path.as_deref());
         Ok(Self::with_state(
             profile,
             config,
             task_queue,
             session_history,
             diff_preview,
+            trace_preview,
         ))
     }
 
@@ -134,6 +140,7 @@ impl WorkbenchApp {
         task_queue: Vec<TaskRecord>,
         session_history: Vec<SessionRecord>,
         diff_preview: String,
+        trace_preview: TracePreview,
     ) -> Self {
         let latest_trace_path = session_history.last().map(|session| session.trace.clone());
         Self {
@@ -145,6 +152,7 @@ impl WorkbenchApp {
             task_queue,
             session_history,
             diff_preview,
+            trace_preview,
             terminal_log: Vec::new(),
             latest_trace_path,
             input: String::new(),
@@ -293,14 +301,27 @@ impl WorkbenchApp {
                     .push(format!("trace: {}", output.trace.display()));
                 self.task_queue = list_tasks(&self.profile.root)?;
                 self.session_history = list_sessions(&self.profile.root)?;
+                self.latest_trace_path = self
+                    .session_history
+                    .last()
+                    .map(|session| session.trace.clone())
+                    .or_else(|| Some(output.trace.clone()));
                 self.diff_preview = load_diff_preview(&self.profile.root)?;
+                self.trace_preview =
+                    load_trace_preview(&self.profile.root, self.latest_trace_path.as_deref());
                 self.status = format!("Task {} {}", output.task_id, output.status);
                 Ok(())
             }
             Err(err) => {
                 self.task_queue = list_tasks(&self.profile.root)?;
                 self.session_history = list_sessions(&self.profile.root)?;
+                self.latest_trace_path = self
+                    .session_history
+                    .last()
+                    .map(|session| session.trace.clone());
                 self.diff_preview = load_diff_preview(&self.profile.root)?;
+                self.trace_preview =
+                    load_trace_preview(&self.profile.root, self.latest_trace_path.as_deref());
                 self.status = format!("Harness run failed: {err}");
                 self.terminal_log.push(format!("error: {err}"));
                 Err(err)
@@ -548,27 +569,25 @@ fn render_session(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
 }
 
 fn render_trace(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
-    let trace_path = app
-        .latest_trace_path
-        .clone()
-        .unwrap_or_else(|| PathBuf::from(".argus/trace.jsonl"));
     let mut lines = vec![
-        Line::from("step 000  TASK"),
-        Line::from("step 001  PLAN"),
-        Line::from("step 002  TOOL"),
-        Line::from("step 003  GATE"),
-        Line::from(""),
-        Line::from("Memory"),
-        Line::from(app.config.memory.project.clone()),
+        Line::from("Trace Timeline"),
+        Line::from(app.trace_preview.headline.clone()),
         Line::from(""),
         Line::from("Trace target"),
-        Line::from(trace_path.display().to_string()),
+        Line::from(app.trace_preview.target.clone()),
     ];
-    if app.latest_trace_path.is_some() {
+    if app.trace_preview.lines.is_empty() {
         lines.push(Line::from(""));
-        lines.push(Line::from("Latest task trace"));
-        lines.push(Line::from(trace_path.display().to_string()));
+        lines.push(Line::from("(no trace events loaded)"));
+    } else {
+        lines.push(Line::from(""));
+        for line in &app.trace_preview.lines {
+            lines.push(Line::from(line.clone()));
+        }
     }
+    lines.push(Line::from(""));
+    lines.push(Line::from("Memory"));
+    lines.push(Line::from(app.config.memory.project.clone()));
     lines.push(Line::from(""));
     lines.push(Line::from("Session History"));
     if app.session_history.is_empty() {
@@ -585,7 +604,7 @@ fn render_trace(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
     f.render_widget(
         Paragraph::new(lines)
             .block(panel_block(
-                "Trace / Memory",
+                "Trace Timeline / Memory",
                 app.active_pane == WorkbenchPane::Trace,
             ))
             .wrap(Wrap { trim: false }),
@@ -715,6 +734,7 @@ mod tests {
     use crate::project::build_config;
     use crate::sessions::append_session;
     use crate::tasks::{list_tasks, queue_task};
+    use argus_trace::{EventKind, TraceWriter};
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::KeyModifiers;
 
@@ -1028,6 +1048,69 @@ mod tests {
         assert!(text.contains("Session History"), "{text}");
         assert!(text.contains("ship the history panel"), "{text}");
         assert!(text.contains("task-1.trace.jsonl"), "{text}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workbench_loads_and_renders_latest_trace_events() {
+        let dir = temp_dir("trace-events");
+        let trace_path = dir.join(".argus/tasks/task-1.trace.jsonl");
+        std::fs::create_dir_all(trace_path.parent().unwrap()).unwrap();
+        let mut writer = TraceWriter::create(&trace_path).unwrap();
+        writer
+            .record(EventKind::TaskStarted {
+                task: "repair parser".into(),
+            })
+            .unwrap();
+        writer
+            .record(EventKind::VerificationGate {
+                passed: true,
+                detail: "cargo test passed".into(),
+            })
+            .unwrap();
+
+        let app = app_with_root(dir.clone());
+        append_session(
+            &dir,
+            "task-1",
+            "repair parser",
+            "done",
+            ".argus/tasks/task-1.trace.jsonl",
+        )
+        .unwrap();
+
+        let app = WorkbenchApp::load(app.profile, app.config).unwrap();
+
+        assert!(
+            app.trace_preview
+                .lines
+                .iter()
+                .any(|line| line.contains("TASK") && line.contains("repair parser")),
+            "{:?}",
+            app.trace_preview
+        );
+        assert!(
+            app.trace_preview
+                .lines
+                .iter()
+                .any(|line| line.contains("GATE") && line.contains("cargo test passed")),
+            "{:?}",
+            app.trace_preview
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 36)).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("Trace Timeline"), "{text}");
+        assert!(text.contains("repair parser"), "{text}");
+        assert!(text.contains("cargo test passed"), "{text}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
