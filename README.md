@@ -122,6 +122,7 @@ arguscode
 # The session panel shows git status/diff preview and can refresh it from Ctrl+K.
 # The Terminal panel can run the configured verification gate from Ctrl+K.
 # The input box also supports slash commands such as /verify, /run, /diff, and /history.
+# Switch models in-session with /provider deepseek deepseek-chat or /model <name>.
 
 # Generate config, project memory, and a smoke eval without opening the TUI.
 arguscode init

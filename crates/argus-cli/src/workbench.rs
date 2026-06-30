@@ -264,7 +264,9 @@ impl WorkbenchApp {
     }
 
     fn execute_slash_command(&mut self, raw: &str) {
-        let command = raw.split_whitespace().next().unwrap_or_default();
+        let mut parts = raw.split_whitespace();
+        let command = parts.next().unwrap_or_default();
+        let args = parts.collect::<Vec<_>>();
         match command {
             "/verify" => {
                 if let Err(err) = self.run_verify_gate() {
@@ -291,13 +293,11 @@ impl WorkbenchApp {
                 self.status = format!("Memory opened: {}", self.config.memory.project);
             }
             "/model" | "/provider" => {
-                self.active_pane = WorkbenchPane::Terminal;
-                self.terminal_log = vec![
-                    format!("provider: {}", self.config.provider.default_provider),
-                    format!("model: {}", self.config.provider.default_model),
-                    format!("routing: {}", self.config.provider.routing),
-                ];
-                self.status = "Provider profile shown.".into();
+                if command == "/model" {
+                    self.update_model(args.first().copied());
+                } else {
+                    self.update_provider_profile(&args);
+                }
             }
             "/clear" => {
                 self.terminal_log.clear();
@@ -317,6 +317,103 @@ impl WorkbenchApp {
                 );
             }
         }
+    }
+
+    fn update_provider_profile(&mut self, args: &[&str]) {
+        match args.first().copied() {
+            None => self.show_provider_profile("Provider profile shown."),
+            Some("mock") => {
+                self.config.provider.default_provider = "mock".into();
+                self.config.provider.default_model =
+                    args.get(1).copied().unwrap_or("mock").to_string();
+                self.config.provider.base_url = None;
+                self.config.provider.api_key_env = None;
+                self.config.provider.routing = "manual".into();
+                self.persist_provider_profile("Provider updated");
+            }
+            Some("openai") => {
+                self.config.provider.default_provider = "openai".into();
+                self.config.provider.default_model =
+                    args.get(1).copied().unwrap_or("gpt-4o-mini").to_string();
+                self.config.provider.base_url = None;
+                self.config.provider.api_key_env = Some("OPENAI_API_KEY".into());
+                self.config.provider.routing = "manual".into();
+                self.persist_provider_profile("Provider updated");
+            }
+            Some("deepseek") => {
+                self.config.provider.default_provider = "openai".into();
+                self.config.provider.default_model =
+                    args.get(1).copied().unwrap_or("deepseek-chat").to_string();
+                self.config.provider.base_url = Some("https://api.deepseek.com".into());
+                self.config.provider.api_key_env = Some("DEEPSEEK_API_KEY".into());
+                self.config.provider.routing = "manual".into();
+                self.persist_provider_profile("Provider updated");
+            }
+            Some("custom") => {
+                let Some(provider) = args.get(1).copied() else {
+                    self.status =
+                        "Usage: /provider custom <provider> <model> [base-url] [api-key-env]"
+                            .into();
+                    return;
+                };
+                let Some(model) = args.get(2).copied() else {
+                    self.status =
+                        "Usage: /provider custom <provider> <model> [base-url] [api-key-env]"
+                            .into();
+                    return;
+                };
+                self.config.provider.default_provider = provider.to_string();
+                self.config.provider.default_model = model.to_string();
+                self.config.provider.base_url = args.get(3).map(|value| (*value).to_string());
+                self.config.provider.api_key_env = args.get(4).map(|value| (*value).to_string());
+                self.config.provider.routing = "manual".into();
+                self.persist_provider_profile("Provider updated");
+            }
+            Some(other) => {
+                self.status = format!(
+                    "Unknown provider profile: {other}. Try mock, openai, deepseek, or custom."
+                );
+            }
+        }
+    }
+
+    fn update_model(&mut self, model: Option<&str>) {
+        let Some(model) = model else {
+            self.show_provider_profile("Provider profile shown.");
+            return;
+        };
+        self.config.provider.default_model = model.to_string();
+        self.persist_provider_profile("Model updated");
+    }
+
+    fn persist_provider_profile(&mut self, label: &str) {
+        match self.config.write(&self.profile.root) {
+            Ok(_) => self.show_provider_profile(label),
+            Err(err) => {
+                self.active_pane = WorkbenchPane::Terminal;
+                self.status = format!("Could not write provider profile: {err}");
+            }
+        }
+    }
+
+    fn show_provider_profile(&mut self, status: &str) {
+        self.active_pane = WorkbenchPane::Terminal;
+        self.terminal_log = vec![
+            format!("provider: {}", self.config.provider.default_provider),
+            format!("model: {}", self.config.provider.default_model),
+            format!("routing: {}", self.config.provider.routing),
+        ];
+        if let Some(base_url) = &self.config.provider.base_url {
+            self.terminal_log.push(format!("base_url: {base_url}"));
+        }
+        if let Some(api_key_env) = &self.config.provider.api_key_env {
+            self.terminal_log
+                .push(format!("api_key_env: {api_key_env}"));
+        }
+        self.status = format!(
+            "{status}: {}/{}",
+            self.config.provider.default_provider, self.config.provider.default_model
+        );
     }
 
     fn refresh_diff_preview(&mut self) {
@@ -774,7 +871,8 @@ Slash commands\n\
 /run     Run latest queued task\n\
 /diff    Refresh diff preview\n\
 /history Open session history\n\
-/model   Show provider profile";
+/model   Set or show current model\n\
+/provider Set or show provider profile";
     f.render_widget(
         Paragraph::new(text)
             .block(
@@ -1139,6 +1237,56 @@ mod tests {
             "{}",
             app.diff_preview
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_provider_updates_deepseek_profile_and_writes_config() {
+        let dir = temp_dir("slash-provider");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = app_with_root(dir.clone());
+
+        for c in "/provider deepseek deepseek-reasoner".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert_eq!(app.config.provider.default_provider, "openai");
+        assert_eq!(app.config.provider.default_model, "deepseek-reasoner");
+        assert_eq!(
+            app.config.provider.base_url.as_deref(),
+            Some("https://api.deepseek.com")
+        );
+        assert_eq!(
+            app.config.provider.api_key_env.as_deref(),
+            Some("DEEPSEEK_API_KEY")
+        );
+        assert!(app.status.contains("Provider updated"), "{}", app.status);
+
+        let saved = ArgusCodeConfig::read(&dir).unwrap();
+        assert_eq!(saved.provider, app.config.provider);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_model_updates_current_model_and_writes_config() {
+        let dir = temp_dir("slash-model");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = app_with_root(dir.clone());
+
+        for c in "/model kimi-k2".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert_eq!(app.config.provider.default_provider, "mock");
+        assert_eq!(app.config.provider.default_model, "kimi-k2");
+        assert!(app.status.contains("Model updated"), "{}", app.status);
+
+        let saved = ArgusCodeConfig::read(&dir).unwrap();
+        assert_eq!(saved.provider.default_model, "kimi-k2");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
