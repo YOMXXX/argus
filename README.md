@@ -123,6 +123,7 @@ arguscode
 # The Terminal panel can run the configured verification gate from Ctrl+K.
 # The input box also supports slash commands such as /verify, /run, /diff, and /history.
 # Switch models in-session with /provider deepseek deepseek-chat or /model <name>.
+# Manage the queue in-session with /tasks, /cancel <task-id>, and /retry <task-id>.
 
 # Generate config, project memory, and a smoke eval without opening the TUI.
 arguscode init

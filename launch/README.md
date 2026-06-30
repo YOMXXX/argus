@@ -28,6 +28,7 @@ Primary proof:
 - The Workbench Terminal panel can execute the configured verification gate from the command palette.
 - The Workbench input supports slash commands for verify, run, diff, history, memory, and provider lookup.
 - The Workbench can update provider/model profiles from slash commands and persist them to `.argus/config.toml`.
+- The Workbench can list, cancel, and requeue tasks from slash commands without leaving the TUI.
 - `argus demo` shows the verification gate catching a bad result and forcing a fix.
 - `argus trace show` exposes the black-box timeline.
 - `argus mcp-serve` gives existing agents a verification tool without switching workflows.

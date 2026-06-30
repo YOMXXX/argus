@@ -88,7 +88,7 @@ pub fn latest_resumable_task(root: &Path) -> Result<Option<TaskRecord>> {
     Ok(list_tasks(root)?
         .into_iter()
         .rev()
-        .find(|task| task.status != "done"))
+        .find(|task| task.status != "done" && task.status != "canceled"))
 }
 
 fn write_tasks(root: &Path, tasks: &[TaskRecord]) -> Result<()> {
@@ -191,6 +191,20 @@ mod tests {
         let older = queue_task(&dir, "still queued").unwrap();
         let newer = queue_task(&dir, "already done").unwrap();
         update_task_status(&dir, &newer.id, "done").unwrap();
+
+        assert_eq!(latest_resumable_task(&dir).unwrap(), Some(older));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn latest_resumable_skips_canceled_tasks() {
+        let dir = temp_dir("canceled");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let older = queue_task(&dir, "still queued").unwrap();
+        let newer = queue_task(&dir, "canceled").unwrap();
+        update_task_status(&dir, &newer.id, "canceled").unwrap();
 
         assert_eq!(latest_resumable_task(&dir).unwrap(), Some(older));
 

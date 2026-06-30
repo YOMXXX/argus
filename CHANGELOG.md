@@ -22,6 +22,7 @@
 - Added executable Workbench verification gate output in the Terminal panel.
 - Added Workbench slash commands for verification, task runs, diff refresh, history, memory, and provider profile lookup.
 - Added Workbench slash commands to update and persist provider/model profiles, including DeepSeek via OpenAI-compatible settings.
+- Added Workbench task queue slash commands for listing, canceling, and requeueing tasks.
 - Updated release packaging and installer support so archives install both `argus` and `arguscode`.
 
 ## 0.1.1 - 2026-06-30

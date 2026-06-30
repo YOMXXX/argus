@@ -3,7 +3,7 @@ use crate::diff::load_diff_preview;
 use crate::harness::{run_task_through_harness, HarnessRunOutput};
 use crate::project::{detect_project, init_project, ProjectProfile};
 use crate::sessions::{list_sessions, SessionRecord};
-use crate::tasks::{latest_resumable_task, list_tasks, queue_task, TaskRecord};
+use crate::tasks::{latest_resumable_task, list_tasks, queue_task, update_task_status, TaskRecord};
 use crate::trace_view::{load_trace_preview, TracePreview};
 use crate::verify::run_configured_verify;
 use anyhow::Result;
@@ -281,6 +281,19 @@ impl WorkbenchApp {
                 }
             }
             "/diff" => self.refresh_diff_preview(),
+            "/tasks" => self.show_task_queue(),
+            "/cancel" => self.update_task_status_from_command(
+                args.first().copied(),
+                "canceled",
+                "Task canceled",
+                "cancel",
+            ),
+            "/retry" => self.update_task_status_from_command(
+                args.first().copied(),
+                "queued",
+                "Task requeued",
+                "retry",
+            ),
             "/history" => {
                 self.active_pane = WorkbenchPane::Trace;
                 self.status = format!(
@@ -315,6 +328,60 @@ impl WorkbenchApp {
                 self.status = format!(
                     "Unknown slash command: {command}. Try /help, /verify, /run, /diff, /history."
                 );
+            }
+        }
+    }
+
+    fn show_task_queue(&mut self) {
+        self.active_pane = WorkbenchPane::Project;
+        match list_tasks(&self.profile.root) {
+            Ok(tasks) => {
+                self.task_queue = tasks;
+                self.terminal_log = if self.task_queue.is_empty() {
+                    vec!["Task queue is empty.".into()]
+                } else {
+                    self.task_queue
+                        .iter()
+                        .rev()
+                        .map(|task| format!("[{}] {}  {}", task.status, task.id, task.text))
+                        .collect()
+                };
+                self.status = format!("Task queue opened: {} task(s)", self.task_queue.len());
+            }
+            Err(err) => {
+                self.status = format!("Could not read task queue: {err}");
+            }
+        }
+    }
+
+    fn update_task_status_from_command(
+        &mut self,
+        task_id: Option<&str>,
+        next_status: &str,
+        label: &str,
+        command: &str,
+    ) {
+        let Some(task_id) = task_id else {
+            self.status = format!("Usage: /{command} <task-id>");
+            return;
+        };
+        self.active_pane = WorkbenchPane::Project;
+        match update_task_status(&self.profile.root, task_id, next_status) {
+            Ok(Some(task)) => {
+                match list_tasks(&self.profile.root) {
+                    Ok(tasks) => self.task_queue = tasks,
+                    Err(err) => {
+                        self.status = format!("{label}, but queue refresh failed: {err}");
+                        return;
+                    }
+                }
+                self.status = format!("{label}: {}", task.id);
+            }
+            Ok(None) => {
+                self.status = format!("Task not found: {task_id}");
+            }
+            Err(err) => {
+                self.status = format!("Could not update task {task_id}: {err}");
             }
         }
     }
@@ -869,6 +936,9 @@ plan -> edit -> verify -> repair -> trace\n\n\
 Slash commands\n\
 /verify  Run verification gate\n\
 /run     Run latest queued task\n\
+/tasks   Show task queue\n\
+/cancel  Cancel a task by id\n\
+/retry   Requeue a task by id\n\
 /diff    Refresh diff preview\n\
 /history Open session history\n\
 /model   Set or show current model\n\
@@ -1287,6 +1357,47 @@ mod tests {
 
         let saved = ArgusCodeConfig::read(&dir).unwrap();
         assert_eq!(saved.provider.default_model, "kimi-k2");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_cancel_marks_task_canceled_without_running_it() {
+        let dir = temp_dir("slash-cancel");
+        std::fs::create_dir_all(&dir).unwrap();
+        let task = queue_task(&dir, "delete generated files").unwrap();
+        let seed = app_with_root(dir.clone());
+        let mut app = WorkbenchApp::load(seed.profile, seed.config).unwrap();
+
+        for c in format!("/cancel {}", task.id).chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert_eq!(app.task_queue[0].status, "canceled");
+        assert_eq!(list_tasks(&dir).unwrap()[0].status, "canceled");
+        assert!(app.status.contains("Task canceled"), "{}", app.status);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_retry_requeues_task() {
+        let dir = temp_dir("slash-retry");
+        std::fs::create_dir_all(&dir).unwrap();
+        let task = queue_task(&dir, "fix flaky test").unwrap();
+        crate::tasks::update_task_status(&dir, &task.id, "failed").unwrap();
+        let seed = app_with_root(dir.clone());
+        let mut app = WorkbenchApp::load(seed.profile, seed.config).unwrap();
+
+        for c in format!("/retry {}", task.id).chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert_eq!(app.task_queue[0].status, "queued");
+        assert_eq!(list_tasks(&dir).unwrap()[0].status, "queued");
+        assert!(app.status.contains("Task requeued"), "{}", app.status);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
