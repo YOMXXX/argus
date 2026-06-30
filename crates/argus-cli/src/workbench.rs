@@ -182,6 +182,9 @@ impl WorkbenchApp {
         let task = self.input.trim().to_string();
         if task.is_empty() {
             self.status = "Enter a task to start an ArgusCode session.".into();
+        } else if task.starts_with('/') {
+            self.input.clear();
+            self.execute_slash_command(&task);
         } else {
             match queue_task(&self.profile.root, &task) {
                 Ok(record) => {
@@ -247,16 +250,7 @@ impl WorkbenchApp {
                 );
             }
             PaletteAction::RefreshDiff => {
-                self.active_pane = WorkbenchPane::Session;
-                match load_diff_preview(&self.profile.root) {
-                    Ok(preview) => {
-                        self.diff_preview = preview;
-                        self.status = "Diff preview refreshed.".into();
-                    }
-                    Err(err) => {
-                        self.status = format!("Could not refresh diff preview: {err}");
-                    }
-                }
+                self.refresh_diff_preview();
             }
             PaletteAction::SmokeEval => {
                 self.active_pane = WorkbenchPane::Trace;
@@ -265,6 +259,75 @@ impl WorkbenchApp {
             PaletteAction::NewTask => {
                 self.active_pane = WorkbenchPane::Session;
                 self.status = "New task ready. Type in the conversation input.".into();
+            }
+        }
+    }
+
+    fn execute_slash_command(&mut self, raw: &str) {
+        let command = raw.split_whitespace().next().unwrap_or_default();
+        match command {
+            "/verify" => {
+                if let Err(err) = self.run_verify_gate() {
+                    self.status = format!("Verification failed: {err}");
+                }
+            }
+            "/run" | "/resume" => {
+                if let Err(err) = self.run_latest_task_with(&mut run_task_through_harness) {
+                    self.active_pane = WorkbenchPane::Terminal;
+                    self.status = format!("Harness run failed: {err}");
+                    self.terminal_log.push(format!("error: {err}"));
+                }
+            }
+            "/diff" => self.refresh_diff_preview(),
+            "/history" => {
+                self.active_pane = WorkbenchPane::Trace;
+                self.status = format!(
+                    "Session history opened: {} run(s)",
+                    self.session_history.len()
+                );
+            }
+            "/memory" => {
+                self.active_pane = WorkbenchPane::Trace;
+                self.status = format!("Memory opened: {}", self.config.memory.project);
+            }
+            "/model" | "/provider" => {
+                self.active_pane = WorkbenchPane::Terminal;
+                self.terminal_log = vec![
+                    format!("provider: {}", self.config.provider.default_provider),
+                    format!("model: {}", self.config.provider.default_model),
+                    format!("routing: {}", self.config.provider.routing),
+                ];
+                self.status = "Provider profile shown.".into();
+            }
+            "/clear" => {
+                self.terminal_log.clear();
+                self.status = "Terminal output cleared.".into();
+            }
+            "/help" => {
+                self.mode = WorkbenchMode::Help;
+                self.status = "Help open. Press ? or Esc to close.".into();
+            }
+            "/new" => {
+                self.active_pane = WorkbenchPane::Session;
+                self.status = "New task ready. Type in the conversation input.".into();
+            }
+            _ => {
+                self.status = format!(
+                    "Unknown slash command: {command}. Try /help, /verify, /run, /diff, /history."
+                );
+            }
+        }
+    }
+
+    fn refresh_diff_preview(&mut self) {
+        self.active_pane = WorkbenchPane::Session;
+        match load_diff_preview(&self.profile.root) {
+            Ok(preview) => {
+                self.diff_preview = preview;
+                self.status = "Diff preview refreshed.".into();
+            }
+            Err(err) => {
+                self.status = format!("Could not refresh diff preview: {err}");
             }
         }
     }
@@ -705,7 +768,13 @@ Enter   Queue task / run selected command\n\
 Esc     Close overlay or exit\n\
 q       Quit\n\n\
 Harness flow\n\
-plan -> edit -> verify -> repair -> trace";
+plan -> edit -> verify -> repair -> trace\n\n\
+Slash commands\n\
+/verify  Run verification gate\n\
+/run     Run latest queued task\n\
+/diff    Refresh diff preview\n\
+/history Open session history\n\
+/model   Show provider profile";
     f.render_widget(
         Paragraph::new(text)
             .block(
@@ -1009,6 +1078,67 @@ mod tests {
             .map(|c| c.symbol())
             .collect();
         assert!(text.contains("fix flaky parser tests"), "{text}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_verify_runs_gate_without_queueing_task() {
+        let dir = temp_dir("slash-verify");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("marker.txt"), "ok\n").unwrap();
+        let mut app = app_with_root(dir.clone());
+        app.config.verify.commands = vec!["test -f marker.txt".into()];
+
+        for c in "/verify".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert!(app.task_queue.is_empty(), "{:?}", app.task_queue);
+        assert!(list_tasks(&dir).unwrap().is_empty());
+        assert_eq!(app.active_pane, WorkbenchPane::Terminal);
+        assert!(app.status.contains("Verification passed"), "{}", app.status);
+        assert!(
+            app.terminal_log.join("\n").contains("$ test -f marker.txt"),
+            "{:?}",
+            app.terminal_log
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_diff_refreshes_preview_without_queueing_task() {
+        let dir = temp_dir("slash-diff");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let mut app = app_with_root(dir.clone());
+        app.diff_preview = "stale".into();
+        std::fs::write(dir.join("slash.txt"), "slash\n").unwrap();
+
+        for c in "/diff".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert!(app.task_queue.is_empty(), "{:?}", app.task_queue);
+        assert!(list_tasks(&dir).unwrap().is_empty());
+        assert_eq!(app.active_pane, WorkbenchPane::Session);
+        assert!(
+            app.status.contains("Diff preview refreshed"),
+            "{}",
+            app.status
+        );
+        assert!(
+            app.diff_preview.contains("slash.txt"),
+            "{}",
+            app.diff_preview
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

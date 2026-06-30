@@ -20,6 +20,7 @@
 - Added real Workbench diff preview from git status/diff with a command palette refresh action.
 - Added real Workbench trace timeline preview from the latest task JSONL trace.
 - Added executable Workbench verification gate output in the Terminal panel.
+- Added Workbench slash commands for verification, task runs, diff refresh, history, memory, and provider profile lookup.
 - Updated release packaging and installer support so archives install both `argus` and `arguscode`.
 
 ## 0.1.1 - 2026-06-30
