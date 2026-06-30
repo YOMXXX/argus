@@ -1,13 +1,11 @@
 use anyhow::Result;
+use argus_cli::harness::{run_task_through_harness, HarnessRunOutput};
 use argus_cli::project::{detect_project, init_project, init_report_text};
-use argus_cli::tasks::{
-    latest_resumable_task, list_tasks, queue_task, update_task_status, TaskRecord,
-};
+use argus_cli::tasks::{latest_resumable_task, list_tasks, queue_task, TaskRecord};
 use argus_cli::workbench::{ensure_config, run_workbench};
 use argus_core::{CommandVerifier, Verifier};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use std::process::Command;
 
 #[derive(Parser)]
 #[command(
@@ -119,7 +117,7 @@ fn resume(cwd: &std::path::Path, run: bool) -> Result<()> {
             println!("Resuming task {}: {}", record.id, record.text);
             println!("status: {}", record.status);
             if run {
-                run_task_through_harness(&profile.root, &record)?;
+                run_task_through_harness_command(&profile.root, &record)?;
             } else {
                 println!("Open the TUI with: arguscode");
                 println!("Run it through the harness with: arguscode resume --run");
@@ -133,52 +131,17 @@ fn resume(cwd: &std::path::Path, run: bool) -> Result<()> {
     Ok(())
 }
 
-fn run_task_through_harness(root: &std::path::Path, record: &TaskRecord) -> Result<()> {
-    let (_, config) = ensure_config(root)?;
-    update_task_status(root, &record.id, "running")?;
-    let trace = PathBuf::from(".argus/tasks").join(format!("{}.trace.jsonl", record.id));
-
+fn run_task_through_harness_command(root: &std::path::Path, record: &TaskRecord) -> Result<()> {
     println!("Running task through Argus harness: {}", record.text);
-    let mut command = Command::new(argus_binary_path()?);
-    command
-        .current_dir(root)
-        .arg("run")
-        .arg(&record.text)
-        .arg("--provider")
-        .arg(&config.provider.default_provider)
-        .arg("--model")
-        .arg(&config.provider.default_model)
-        .arg("--yes")
-        .arg("--trace")
-        .arg(&trace);
-    for verify in &config.verify.commands {
-        command.arg("--verify").arg(verify);
-    }
-
-    let output = command.output()?;
-    print!("{}", String::from_utf8_lossy(&output.stdout));
-    eprint!("{}", String::from_utf8_lossy(&output.stderr));
-
-    if output.status.success() {
-        update_task_status(root, &record.id, "done")?;
-        println!("status: done");
-        println!("trace: {}", trace.display());
-        Ok(())
-    } else {
-        update_task_status(root, &record.id, "failed")?;
-        anyhow::bail!("Argus harness failed with {}", output.status)
-    }
+    print_harness_output(run_task_through_harness(root, record)?);
+    Ok(())
 }
 
-fn argus_binary_path() -> Result<PathBuf> {
-    let exe = std::env::current_exe()?;
-    let binary_name = if cfg!(windows) { "argus.exe" } else { "argus" };
-    let sibling = exe.with_file_name(binary_name);
-    if sibling.exists() {
-        Ok(sibling)
-    } else {
-        Ok(PathBuf::from(binary_name))
-    }
+fn print_harness_output(output: HarnessRunOutput) {
+    print!("{}", output.stdout);
+    eprint!("{}", output.stderr);
+    println!("status: {}", output.status);
+    println!("trace: {}", output.trace.display());
 }
 
 async fn verify(cwd: &std::path::Path) -> Result<()> {

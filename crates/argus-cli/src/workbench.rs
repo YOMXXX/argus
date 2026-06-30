@@ -1,6 +1,7 @@
 use crate::config::{ArgusCodeConfig, CONFIG_PATH};
+use crate::harness::{run_task_through_harness, HarnessRunOutput};
 use crate::project::{detect_project, init_project, ProjectProfile};
-use crate::tasks::{list_tasks, queue_task, TaskRecord};
+use crate::tasks::{latest_resumable_task, list_tasks, queue_task, TaskRecord};
 use anyhow::Result;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::crossterm::execute;
@@ -31,6 +32,7 @@ pub enum WorkbenchMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PaletteAction {
+    RunLatestTask,
     Verify,
     Memory,
     SmokeEval,
@@ -45,6 +47,11 @@ struct PaletteItem {
 }
 
 const PALETTE_ITEMS: &[PaletteItem] = &[
+    PaletteItem {
+        action: PaletteAction::RunLatestTask,
+        label: "Run latest queued task",
+        detail: "Execute through the Argus harness and refresh trace output",
+    },
     PaletteItem {
         action: PaletteAction::Verify,
         label: "Run verification gate",
@@ -75,6 +82,8 @@ pub struct WorkbenchApp {
     pub mode: WorkbenchMode,
     pub palette_selected: usize,
     pub task_queue: Vec<TaskRecord>,
+    pub terminal_log: Vec<String>,
+    pub latest_trace_path: Option<PathBuf>,
     pub input: String,
     pub status: String,
 }
@@ -101,6 +110,8 @@ impl WorkbenchApp {
             mode: WorkbenchMode::Normal,
             palette_selected: 0,
             task_queue,
+            terminal_log: Vec::new(),
+            latest_trace_path: None,
             input: String::new(),
             status: "Ready. Type a task, Tab switches panes, Ctrl+K opens command palette.".into(),
         }
@@ -168,6 +179,13 @@ impl WorkbenchApp {
         let action = PALETTE_ITEMS[self.palette_selected].action;
         self.mode = WorkbenchMode::Normal;
         match action {
+            PaletteAction::RunLatestTask => {
+                if let Err(err) = self.run_latest_task_with(&mut run_task_through_harness) {
+                    self.active_pane = WorkbenchPane::Terminal;
+                    self.status = format!("Harness run failed: {err}");
+                    self.terminal_log.push(format!("error: {err}"));
+                }
+            }
             PaletteAction::Verify => {
                 self.active_pane = WorkbenchPane::Terminal;
                 let commands = if self.config.verify.commands.is_empty() {
@@ -188,6 +206,46 @@ impl WorkbenchApp {
             PaletteAction::NewTask => {
                 self.active_pane = WorkbenchPane::Session;
                 self.status = "New task ready. Type in the conversation input.".into();
+            }
+        }
+    }
+
+    pub fn run_latest_task_with<F>(&mut self, runner: &mut F) -> Result<()>
+    where
+        F: FnMut(&Path, &TaskRecord) -> Result<HarnessRunOutput>,
+    {
+        let Some(task) = latest_resumable_task(&self.profile.root)? else {
+            self.active_pane = WorkbenchPane::Terminal;
+            self.status = "No resumable task found.".into();
+            self.terminal_log.push("No resumable task found.".into());
+            return Ok(());
+        };
+
+        self.active_pane = WorkbenchPane::Terminal;
+        self.status = format!("Running task {} through Argus harness...", task.id);
+        self.terminal_log = vec![format!("$ arguscode resume --run  # {}", task.text)];
+
+        match runner(&self.profile.root, &task) {
+            Ok(output) => {
+                self.latest_trace_path = Some(output.trace.clone());
+                if !output.stdout.trim().is_empty() {
+                    self.terminal_log.push(output.stdout);
+                }
+                if !output.stderr.trim().is_empty() {
+                    self.terminal_log.push(output.stderr);
+                }
+                self.terminal_log.push(format!("status: {}", output.status));
+                self.terminal_log
+                    .push(format!("trace: {}", output.trace.display()));
+                self.task_queue = list_tasks(&self.profile.root)?;
+                self.status = format!("Task {} {}", output.task_id, output.status);
+                Ok(())
+            }
+            Err(err) => {
+                self.task_queue = list_tasks(&self.profile.root)?;
+                self.status = format!("Harness run failed: {err}");
+                self.terminal_log.push(format!("error: {err}"));
+                Err(err)
             }
         }
     }
@@ -431,8 +489,11 @@ fn render_session(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
 }
 
 fn render_trace(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
-    let trace_path = PathBuf::from(".argus/trace.jsonl");
-    let lines = vec![
+    let trace_path = app
+        .latest_trace_path
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(".argus/trace.jsonl"));
+    let mut lines = vec![
         Line::from("step 000  TASK"),
         Line::from("step 001  PLAN"),
         Line::from("step 002  TOOL"),
@@ -444,6 +505,11 @@ fn render_trace(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
         Line::from("Trace target"),
         Line::from(trace_path.display().to_string()),
     ];
+    if app.latest_trace_path.is_some() {
+        lines.push(Line::from(""));
+        lines.push(Line::from("Latest task trace"));
+        lines.push(Line::from(trace_path.display().to_string()));
+    }
     f.render_widget(
         Paragraph::new(lines)
             .block(panel_block(
@@ -456,7 +522,9 @@ fn render_trace(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
 }
 
 fn render_terminal(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
-    let commands = if app.config.verify.commands.is_empty() {
+    let commands = if !app.terminal_log.is_empty() {
+        app.terminal_log.join("\n")
+    } else if app.config.verify.commands.is_empty() {
         "No verification command configured.".to_string()
     } else {
         app.config
@@ -571,6 +639,7 @@ fn panel_block(title: &'static str, active: bool) -> Block<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::harness::HarnessRunOutput;
     use crate::project::build_config;
     use crate::tasks::{list_tasks, queue_task};
     use ratatui::backend::TestBackend;
@@ -650,6 +719,7 @@ mod tests {
         assert_eq!(app.mode, WorkbenchMode::CommandPalette);
         assert!(app.status.contains("Command palette"), "{}", app.status);
 
+        assert!(handle_key(&mut app, KeyCode::Down, KeyModifiers::empty()));
         assert!(handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty()));
         assert_eq!(app.mode, WorkbenchMode::Normal);
         assert_eq!(app.active_pane, WorkbenchPane::Terminal);
@@ -661,6 +731,7 @@ mod tests {
         let mut app = app();
 
         handle_key(&mut app, KeyCode::Char('k'), KeyModifiers::CONTROL);
+        handle_key(&mut app, KeyCode::Down, KeyModifiers::empty());
         handle_key(&mut app, KeyCode::Down, KeyModifiers::empty());
         handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
 
@@ -733,6 +804,57 @@ mod tests {
             .map(|c| c.symbol())
             .collect();
         assert!(text.contains("fix flaky parser tests"), "{text}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workbench_runs_latest_task_and_renders_harness_output() {
+        let dir = temp_dir("run-task");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = app_with_root(dir.clone());
+        let record = queue_task(&dir, "fix the failing parser test").unwrap();
+        app = WorkbenchApp::load(app.profile, app.config).unwrap();
+
+        let mut ran_task = None;
+        app.run_latest_task_with(&mut |root, task| {
+            ran_task = Some(task.id.clone());
+            crate::tasks::update_task_status(root, &task.id, "done").unwrap();
+            Ok(HarnessRunOutput {
+                task_id: task.id.clone(),
+                task_text: task.text.clone(),
+                status: "done".into(),
+                trace: PathBuf::from(".argus/tasks/fake.trace.jsonl"),
+                stdout: "model output".into(),
+                stderr: "(trace written to .argus/tasks/fake.trace.jsonl)".into(),
+            })
+        })
+        .unwrap();
+
+        assert_eq!(ran_task, Some(record.id));
+        assert_eq!(app.active_pane, WorkbenchPane::Terminal);
+        assert_eq!(app.task_queue[0].status, "done");
+        assert_eq!(
+            app.latest_trace_path,
+            Some(PathBuf::from(".argus/tasks/fake.trace.jsonl"))
+        );
+        assert!(
+            app.terminal_log.join("\n").contains("model output"),
+            "{:?}",
+            app.terminal_log
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 32)).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("model output"), "{text}");
+        assert!(text.contains("fake.trace.jsonl"), "{text}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

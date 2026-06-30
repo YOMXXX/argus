@@ -18,6 +18,7 @@ Primary proof:
 - `arguscode init` detects the project, imports rules, and creates memory/config/evals.
 - `arguscode task` queues work locally and `arguscode resume` picks up the latest queued task.
 - Tasks typed directly in the Workbench persist to `.argus/tasks/queue.jsonl`.
+- The Workbench command palette can run the latest queued task and show harness output plus the trace path.
 - `arguscode resume --run` executes the latest queued task through the Argus harness and writes a per-task trace.
 - `arguscode verify` runs the same detected verification gate without leaving the ArgusCode entrypoint.
 - `argus demo` shows the verification gate catching a bad result and forcing a fix.
