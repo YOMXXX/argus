@@ -7,6 +7,7 @@ use crate::harness::{run_task_through_harness, HarnessRunOutput};
 use crate::memory::{append_lesson, load_memory_preview};
 use crate::project::{detect_project, init_project, ProjectProfile};
 use crate::repo_map::load_repo_map;
+use crate::review::{load_change_review, record_review_decision};
 use crate::route_runner::{run_task_through_route, RouteRunOutput};
 use crate::sessions::{list_sessions, SessionRecord};
 use crate::tasks::{latest_resumable_task, list_tasks, queue_task, update_task_status, TaskRecord};
@@ -106,6 +107,7 @@ pub struct WorkbenchApp {
     pub task_queue: Vec<TaskRecord>,
     pub session_history: Vec<SessionRecord>,
     pub diff_preview: String,
+    pub change_review: String,
     pub trace_preview: TracePreview,
     pub repo_map: String,
     pub eval_dashboard: String,
@@ -120,6 +122,7 @@ struct WorkbenchLoadedData {
     task_queue: Vec<TaskRecord>,
     session_history: Vec<SessionRecord>,
     diff_preview: String,
+    change_review: String,
     trace_preview: TracePreview,
     repo_map: String,
     eval_dashboard: String,
@@ -135,6 +138,7 @@ impl WorkbenchApp {
                 task_queue: Vec::new(),
                 session_history: Vec::new(),
                 diff_preview: "(not loaded)".into(),
+                change_review: "(not loaded)".into(),
                 trace_preview: TracePreview::empty(),
                 repo_map: "(not loaded)".into(),
                 eval_dashboard: "(not loaded)".into(),
@@ -147,6 +151,7 @@ impl WorkbenchApp {
         let task_queue = list_tasks(&profile.root)?;
         let session_history = list_sessions(&profile.root)?;
         let diff_preview = load_diff_preview(&profile.root)?;
+        let change_review = load_change_review(&profile.root)?;
         let latest_trace_path = session_history.last().map(|session| session.trace.clone());
         let trace_preview = load_trace_preview(&profile.root, latest_trace_path.as_deref());
         let repo_map = load_repo_map(&profile.root, &profile, &config)?;
@@ -159,6 +164,7 @@ impl WorkbenchApp {
                 task_queue,
                 session_history,
                 diff_preview,
+                change_review,
                 trace_preview,
                 repo_map,
                 eval_dashboard,
@@ -185,6 +191,7 @@ impl WorkbenchApp {
             task_queue: data.task_queue,
             session_history: data.session_history,
             diff_preview: data.diff_preview,
+            change_review: data.change_review,
             trace_preview: data.trace_preview,
             repo_map: data.repo_map,
             eval_dashboard: data.eval_dashboard,
@@ -332,6 +339,9 @@ impl WorkbenchApp {
                 }
             }
             "/diff" => self.refresh_diff_preview(),
+            "/review" => self.refresh_change_review(),
+            "/accept" => self.accept_change_review(&args.join(" ")),
+            "/rework" => self.queue_rework_task(&args.join(" ")),
             "/map" => self.refresh_repo_map(),
             "/eval" | "/evals" => self.refresh_eval_dashboard(),
             "/route-run" => {
@@ -815,6 +825,57 @@ impl WorkbenchApp {
         }
     }
 
+    fn refresh_change_review(&mut self) {
+        self.active_pane = WorkbenchPane::Session;
+        match load_change_review(&self.profile.root) {
+            Ok(review) => {
+                self.change_review = review;
+                self.status = "Change review refreshed.".into();
+            }
+            Err(err) => {
+                self.status = format!("Could not refresh change review: {err}");
+            }
+        }
+    }
+
+    fn accept_change_review(&mut self, note: &str) {
+        self.active_pane = WorkbenchPane::Terminal;
+        match record_review_decision(&self.profile.root, "accepted", note) {
+            Ok(record) => {
+                self.change_review = load_change_review(&self.profile.root)
+                    .unwrap_or_else(|err| format!("Could not refresh change review: {err}"));
+                self.terminal_log = vec![
+                    format!("decision: {}", record.decision),
+                    format!("note: {}", record.note),
+                ];
+                self.status = "Review accepted.".into();
+            }
+            Err(err) => {
+                self.status = format!("Could not record review decision: {err}");
+            }
+        }
+    }
+
+    fn queue_rework_task(&mut self, task: &str) {
+        let task = task.trim();
+        if task.is_empty() {
+            self.status = "Usage: /rework <follow-up task>".into();
+            return;
+        }
+        let text = format!("Review follow-up: {task}");
+        match queue_task(&self.profile.root, &text) {
+            Ok(record) => {
+                self.active_pane = WorkbenchPane::Session;
+                self.task_queue.push(record.clone());
+                let _ = record_review_decision(&self.profile.root, "rework", task);
+                self.status = format!("Rework queued: {}", record.id);
+            }
+            Err(err) => {
+                self.status = format!("Could not queue rework task: {err}");
+            }
+        }
+    }
+
     pub fn run_latest_task_with<F>(&mut self, runner: &mut F) -> Result<()>
     where
         F: FnMut(&Path, &TaskRecord) -> Result<HarnessRunOutput>,
@@ -857,6 +918,7 @@ impl WorkbenchApp {
                     .map(|session| session.trace.clone())
                     .or_else(|| Some(output.trace.clone()));
                 self.diff_preview = load_diff_preview(&self.profile.root)?;
+                self.change_review = load_change_review(&self.profile.root)?;
                 self.trace_preview =
                     load_trace_preview(&self.profile.root, self.latest_trace_path.as_deref());
                 self.status = format!("Task {} {}", output.task_id, output.status);
@@ -870,6 +932,7 @@ impl WorkbenchApp {
                     .last()
                     .map(|session| session.trace.clone());
                 self.diff_preview = load_diff_preview(&self.profile.root)?;
+                self.change_review = load_change_review(&self.profile.root)?;
                 self.trace_preview =
                     load_trace_preview(&self.profile.root, self.latest_trace_path.as_deref());
                 self.status = format!("Harness run failed: {err}");
@@ -912,6 +975,7 @@ impl WorkbenchApp {
         self.terminal_log
             .push(format!("report: {}", output.report_json.display()));
         self.eval_dashboard = load_eval_dashboard(&self.profile.root)?;
+        self.change_review = load_change_review(&self.profile.root)?;
         self.status = if output.status == "passed" {
             format!("Eval passed: {}", output.suite.display())
         } else {
@@ -976,6 +1040,7 @@ impl WorkbenchApp {
                     .map(|session| session.trace.clone())
                     .or_else(|| Some(output.trace.clone()));
                 self.diff_preview = load_diff_preview(&self.profile.root)?;
+                self.change_review = load_change_review(&self.profile.root)?;
                 self.trace_preview =
                     load_trace_preview(&self.profile.root, self.latest_trace_path.as_deref());
                 self.status = format!(
@@ -992,6 +1057,7 @@ impl WorkbenchApp {
                     .last()
                     .map(|session| session.trace.clone());
                 self.diff_preview = load_diff_preview(&self.profile.root)?;
+                self.change_review = load_change_review(&self.profile.root)?;
                 self.trace_preview =
                     load_trace_preview(&self.profile.root, self.latest_trace_path.as_deref());
                 self.status = format!("Route run failed: {err}");
@@ -1258,21 +1324,28 @@ fn render_session(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
             .collect::<Vec<_>>()
             .join("\n")
     };
+    let review_loop = app
+        .change_review
+        .lines()
+        .take(14)
+        .collect::<Vec<_>>()
+        .join("\n");
     let text = format!(
-        "Chat\n> {}\n\nTask Queue\n{}\n\nPlan\n1. Understand the request and repo rules.\n2. Edit through the harness.\n3. Run verification gate.\n4. Record trace and summarize evidence.\n\nDiff Preview\n{}\n\nVerify Profile\n{}",
+        "Chat\n> {}\n\nTask Queue\n{}\n\nPlan\n1. Understand the request and repo rules.\n2. Edit through the harness.\n3. Run verification gate.\n4. Record trace and summarize evidence.\n\nReview Loop\n{}\n\nDiff Preview\n{}\n\nVerify Profile\n{}",
         if app.input.is_empty() {
             "Type a task here, then press Enter.".to_string()
         } else {
             app.input.clone()
         },
         queue,
+        review_loop,
         app.diff_preview,
         verify
     );
     f.render_widget(
         Paragraph::new(text)
             .block(panel_block(
-                "Conversation / Plan / Diff",
+                "Conversation / Plan / Review",
                 app.active_pane == WorkbenchPane::Session,
             ))
             .wrap(Wrap { trim: false }),
@@ -1412,6 +1485,9 @@ Slash commands\n\
 /cancel  Cancel a task by id\n\
 /retry   Requeue a task by id\n\
 /diff    Refresh diff preview\n\
+/review  Refresh change review\n\
+/accept  Record accepted review decision\n\
+/rework  Queue a review follow-up task\n\
 /history Open session history\n\
 /memory  Refresh project memory preview\n\
 /remember Append a durable lesson\n\
@@ -2302,6 +2378,98 @@ mod tests {
             "{:?}",
             app.terminal_log
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_review_refreshes_change_review_without_queueing_task() {
+        let dir = temp_dir("slash-review");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::fs::write(dir.join("new-file.txt"), "hello\n").unwrap();
+        let seed = app_with_root(dir.clone());
+        let mut app = WorkbenchApp::load(seed.profile, seed.config).unwrap();
+        app.change_review = "stale".into();
+
+        for c in "/review".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert!(app.task_queue.is_empty(), "{:?}", app.task_queue);
+        assert!(list_tasks(&dir).unwrap().is_empty());
+        assert_eq!(app.active_pane, WorkbenchPane::Session);
+        assert!(
+            app.status.contains("Change review refreshed"),
+            "{}",
+            app.status
+        );
+        assert!(
+            app.change_review.contains("Change Review"),
+            "{}",
+            app.change_review
+        );
+        assert!(
+            app.change_review.contains("new-file.txt"),
+            "{}",
+            app.change_review
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_accept_records_review_decision() {
+        let dir = temp_dir("slash-accept");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = app_with_root(dir.clone());
+
+        for c in "/accept looks good".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert_eq!(app.active_pane, WorkbenchPane::Terminal);
+        assert!(app.status.contains("Review accepted"), "{}", app.status);
+        let decisions =
+            std::fs::read_to_string(dir.join(".argus/reviews/decisions.jsonl")).unwrap();
+        assert!(
+            decisions.contains("\"decision\":\"accepted\""),
+            "{decisions}"
+        );
+        assert!(decisions.contains("\"note\":\"looks good\""), "{decisions}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_rework_queues_follow_up_task() {
+        let dir = temp_dir("slash-rework");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = app_with_root(dir.clone());
+
+        for c in "/rework tighten parser edge cases".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert_eq!(app.active_pane, WorkbenchPane::Session);
+        assert_eq!(app.task_queue.len(), 1);
+        assert!(
+            app.task_queue[0]
+                .text
+                .contains("Review follow-up: tighten parser edge cases"),
+            "{:?}",
+            app.task_queue
+        );
+        let tasks = list_tasks(&dir).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert!(app.status.contains("Rework queued"), "{}", app.status);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

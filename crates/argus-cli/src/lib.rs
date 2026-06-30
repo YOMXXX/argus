@@ -7,6 +7,7 @@ pub mod harness;
 pub mod memory;
 pub mod project;
 pub mod repo_map;
+pub mod review;
 pub mod route_runner;
 pub mod sessions;
 pub mod tasks;
