@@ -1,11 +1,11 @@
 # Argus demo — record with VHS (https://github.com/charmbracelet/vhs):
-#   vhs benchmarks/demo.tape   ->   produces demo.gif
+#   vhs benchmarks/demo.tape   ->   produces benchmarks/demo.gif
 #
-# Requires: argus on PATH, ANTHROPIC_API_KEY set, python3 available.
+# Requires: target/debug/argus built from this repo.
 # This records the money shot: the agent claims done, the verification gate
 # catches the failing test, and the agent fixes it for real.
 
-Output demo.gif
+Output benchmarks/demo.gif
 
 Set FontSize 18
 Set Width 1100
@@ -13,22 +13,18 @@ Set Height 640
 Set Theme "Dracula"
 Set Padding 20
 
-Type "cd benchmarks/cases/fix-fibonacci"
+Type "rm -rf .argus/demo-workspace"
 Enter
-Sleep 1s
+Sleep 500ms
 
 Type "# An AI agent says 'done' — Argus makes it prove it."
 Enter
-Sleep 1500ms
+Sleep 1s
 
-Type "argus run 'fix the bug in fib.py' --provider anthropic --model claude-sonnet-4-5 --yes --verify 'python3 test_fib.py'"
-Enter
-Sleep 12s
-
-Type "python3 test_fib.py   # verified for real"
-Enter
-Sleep 2s
-
-Type "argus tui   # browse the black box of what just happened"
+Type "target/debug/argus demo --workspace .argus/demo-workspace"
 Enter
 Sleep 3s
+
+Type "target/debug/argus trace show .argus/demo-workspace/.argus/demo.jsonl"
+Enter
+Sleep 4s

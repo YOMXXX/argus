@@ -1,6 +1,7 @@
 //! Agent 主循环。
 
 use crate::approver::Approver;
+use crate::policy::{PolicyAction, SandboxPolicy};
 use crate::provider::Provider;
 use crate::tool::Tool;
 use crate::types::{CompletionRequest, Content, Message, Role, ToolSpec};
@@ -18,6 +19,7 @@ pub struct Agent<'a> {
     verifier: Option<Box<dyn Verifier>>,
     max_verify_attempts: usize,
     system: Option<String>,
+    policy: SandboxPolicy,
 }
 
 impl<'a> Agent<'a> {
@@ -36,6 +38,7 @@ impl<'a> Agent<'a> {
             verifier: None,
             max_verify_attempts: 3,
             system: None,
+            policy: SandboxPolicy::default(),
         }
     }
 
@@ -51,6 +54,11 @@ impl<'a> Agent<'a> {
 
     pub fn with_verifier(mut self, verifier: Box<dyn Verifier>) -> Self {
         self.verifier = Some(verifier);
+        self
+    }
+
+    pub fn with_policy(mut self, policy: SandboxPolicy) -> Self {
+        self.policy = policy;
         self
     }
 
@@ -176,24 +184,39 @@ impl<'a> Agent<'a> {
                 })?;
                 let tool = self.tools.iter().find(|t| t.name() == call.name);
                 let (output, is_error) = match tool {
-                    Some(tool) if tool.requires_approval() => {
-                        let approved = match &self.approver {
-                            Some(a) => a.approve(tool.name(), &call.input.to_string()),
-                            None => false, // 需审批但无审批者：默认拒绝（安全）
-                        };
-                        if approved {
-                            match tool.execute(&call.input).await {
+                    Some(tool) => {
+                        let operation = tool.operation_kind();
+                        let decision = self.policy.decide(operation, tool.name());
+                        self.trace.record(EventKind::PolicyDecision {
+                            tool_name: tool.name().to_string(),
+                            operation: operation.as_str().to_string(),
+                            decision: decision.action.as_str().to_string(),
+                            reason: decision.reason.clone(),
+                        })?;
+                        match decision.action {
+                            PolicyAction::Deny => {
+                                (format!("denied by policy: {}", decision.reason), true)
+                            }
+                            PolicyAction::Ask => {
+                                let approved = match &self.approver {
+                                    Some(a) => a.approve(tool.name(), &call.input.to_string()),
+                                    None => false,
+                                };
+                                if approved {
+                                    match tool.execute(&call.input).await {
+                                        Ok(out) => (out, false),
+                                        Err(e) => (format!("error: {e}"), true),
+                                    }
+                                } else {
+                                    (format!("denied by user: {}", tool.name()), true)
+                                }
+                            }
+                            PolicyAction::Allow => match tool.execute(&call.input).await {
                                 Ok(out) => (out, false),
                                 Err(e) => (format!("error: {e}"), true),
-                            }
-                        } else {
-                            (format!("denied by user: {}", tool.name()), true)
+                            },
                         }
                     }
-                    Some(tool) => match tool.execute(&call.input).await {
-                        Ok(out) => (out, false),
-                        Err(e) => (format!("error: {e}"), true),
-                    },
                     None => (format!("error: unknown tool '{}'", call.name), true),
                 };
                 self.trace.record(EventKind::ToolResult {
@@ -359,6 +382,43 @@ mod tests {
         }
         let events = read_trace(&path).unwrap();
         assert!(events.iter().any(|e| matches!(&e.kind, EventKind::ToolResult { ok: false, output, .. } if output.contains("denied"))));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn read_only_policy_denies_write_even_with_auto_approver() {
+        let dir =
+            std::env::temp_dir().join(format!("argus-policy-readonly-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("trace.jsonl");
+        let provider = MockProvider::new();
+        {
+            let mut trace = TraceWriter::create(&path).unwrap();
+            let mut agent = Agent::new(&provider, "demo", &mut trace)
+                .with_tools(vec![Box::new(crate::tool::WriteFile::new(&dir))])
+                .with_approver(Box::new(AutoApprover))
+                .with_policy(crate::policy::SandboxPolicy::read_only());
+            let out = agent.run("write a file").await.unwrap();
+            assert!(out.contains("acknowledged") || out.contains("done"));
+        }
+
+        assert!(!dir.join("mock.txt").exists());
+        let events = read_trace(&path).unwrap();
+        assert!(
+            events.iter().any(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::PolicyDecision {
+                        tool_name,
+                        decision,
+                        ..
+                    } if tool_name == "write_file" && decision == "deny"
+                )
+            }),
+            "trace should record the deny decision: {events:?}"
+        );
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -51,6 +51,7 @@ pub fn event_summary(e: &TraceEvent) -> String {
         EventKind::ModelResponse { .. } => "MODEL<-",
         EventKind::ToolCall { .. } => "TOOL->",
         EventKind::ToolResult { .. } => "TOOL<-",
+        EventKind::PolicyDecision { .. } => "POLICY",
         EventKind::Diff { .. } => "DIFF",
         EventKind::VerificationGate { .. } => "GATE",
         EventKind::RouteDecision { .. } => "ROUTE",
@@ -81,6 +82,16 @@ pub fn event_detail(e: &TraceEvent) -> String {
         EventKind::ToolCall { name, args } => format!("TOOL CALL\n\n{name}\n\nargs: {args}"),
         EventKind::ToolResult { name, ok, output } => {
             format!("TOOL RESULT\n\n{name} (ok={ok})\n\n{output}")
+        }
+        EventKind::PolicyDecision {
+            tool_name,
+            operation,
+            decision,
+            reason,
+        } => {
+            format!(
+                "POLICY DECISION\n\ntool: {tool_name}\noperation: {operation}\ndecision: {decision}\n\n{reason}"
+            )
         }
         EventKind::Diff { path, patch } => format!("DIFF {path}\n\n{patch}"),
         EventKind::VerificationGate { passed, detail } => {

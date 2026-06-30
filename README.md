@@ -12,7 +12,7 @@ One open-source, model-agnostic tool with the best of every coding agent — Cla
 
 `Rust` · `MIT OR Apache-2.0` · `MCP-native`
 
-<!-- Demo gif: run `vhs benchmarks/demo.tape` to produce demo.gif, then embed it here:  ![Argus demo](benchmarks/demo.gif) -->
+![Argus verification gate demo](benchmarks/demo.gif)
 
 </div>
 
@@ -27,7 +27,7 @@ Argus makes a different bet: **prove it, don't hope.** Named after the hundred-e
 It comes in **two shapes**:
 
 1. **A standalone agent** — `argus run "..."` runs the full think→tool→verify loop, recording everything.
-2. **A trust layer for *other* agents** — `argus mcp-serve` exposes Argus's reliability tools over MCP, so Claude Code / Cursor / Codex can call them. Don't switch agents — give the one you have a verification gate and a black box.
+2. **A trust layer for *other* agents** — `argus mcp-serve --workspace <repo>` exposes Argus's reliability tools over MCP, so Claude Code / Cursor / Codex can call them. Don't switch agents — give the one you have a verification gate and a black box.
 
 ## The four things nobody else does
 
@@ -61,9 +61,12 @@ Argus doesn't just claim reliability — it **measures** it. The [reliability be
 
 | Model | Pass-rate |
 |---|---|
+| deepseek-v4-pro | 15/15 attempts passed (100%, gate on, samples=5, 95% CI 80%–100%, 2026-06-30) |
 | claude-sonnet-4-5 | _run it_ |
 | gpt-4o-mini | _run it_ |
 | local llama3.1 | _run it_ |
+
+Gate-off comparison on the same run: 14/15 attempts passed (93%, 95% CI 70%–99%); one no-gate attempt failed with a provider response decoding error. Full result: [`benchmarks/results/deepseek-v4-pro-2026-06-30.md`](benchmarks/results/deepseek-v4-pro-2026-06-30.md).
 
 Then point it at *your own* repo with `argus eval` — reliability you can put a number on.
 
@@ -74,9 +77,11 @@ Then point it at *your own* repo with `argus eval` — reliability you can put a
 - 🧩 **MCP-native** — Argus is both an MCP *client* (consume external tools) and an MCP *server* (expose its own).
 - 📜 **Open everything** — open source, open trace format, no vendor lock.
 
-> **Status:** v1.0 feature-complete (all four killer features + multi-provider + TUI + MCP server work today, with 70+ tests and zero clippy warnings). Prebuilt binaries / `curl | sh` installer / crates.io release are the next step — for now, build from source (30 seconds below).
+> **Status:** v1.0 feature-complete (all four killer features + multi-provider + TUI + MCP server work today, with 100+ tests and zero clippy warnings). Release automation, a checksum-verifying installer, and the hardened sandbox policy MVP are in-tree; the first public binary release now needs a maintainer tag/publish pass.
 
 ## Install
+
+From source:
 
 ```bash
 git clone https://github.com/YOMXXX/argus && cd argus
@@ -84,13 +89,25 @@ cargo install --path crates/argus-cli     # installs `argus` into ~/.cargo/bin
 argus --help
 ```
 
-Requires a recent stable Rust toolchain (`rustup`/`cargo`/`rustc`).
+From a GitHub Release, once a tagged release exists:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/YOMXXX/argus/master/install.sh \
+  | ARGUS_VERSION=v0.1.0 sh
+```
+
+The installer supports macOS and Linux prebuilt archives, downloads the matching `.sha256`, verifies it, then installs `argus` to `${ARGUS_INSTALL_DIR:-$HOME/.local/bin}`.
+
+Building from source requires a recent stable Rust toolchain (`rustup`/`cargo`/`rustc`).
 
 ## Quick start (no API key needed)
 
 Argus ships a built-in **mock provider**, so you can see the whole agent loop and the black box immediately — zero config:
 
 ```bash
+# The money shot: gate catches fake done, the agent fixes, trace records it.
+argus demo
+
 # Run a task. Every step is recorded to an open JSONL trace.
 argus run "add a hello-world endpoint"
 
@@ -124,12 +141,30 @@ Don't want to switch agents? Give your current one a verification gate. Argus ru
 ```json
 {
   "mcpServers": {
-    "argus": { "command": "argus", "args": ["mcp-serve"] }
+    "argus": {
+      "command": "argus",
+      "args": ["mcp-serve", "--workspace", "/path/to/your/repo"]
+    }
   }
 }
 ```
 
-Now your agent has a `verify` tool: it can *prove* a task is actually done (build/test/lint all exit 0) instead of just claiming it. Argus is the trust layer for the agents you already use.
+By default your agent gets the `verify` tool only, so it can prove a task is actually done before claiming success. Opt into broader tools explicitly:
+
+```json
+{
+  "mcpServers": {
+    "argus": {
+      "command": "argus",
+      "args": [
+        "mcp-serve", "--workspace", "/path/to/your/repo",
+        "--allow-tool", "eval",
+        "--allow-tool", "route"
+      ]
+    }
+  }
+}
+```
 
 ## Use a real model (Anthropic / OpenAI / compatible)
 
@@ -169,13 +204,23 @@ Define a suite (each case = a task + the `verify` commands that decide pass/fail
 ```json
 { "name": "smoke",
   "cases": [ { "id": "hello", "task": "add a /hello endpoint returning 200",
-               "dir": "fixtures/api", "verify": ["cargo build", "cargo test hello"] } ] }
+               "dir": "fixtures/api", "verify": ["cargo build", "cargo test hello"],
+               "reset": "git" } ] }
 ```
 ```bash
 argus eval suite.json --provider anthropic --model claude-sonnet-4-5
 # 1/1 passed (100%)  — each case writes its own trace under .argus/eval/
+
+# Measure stability with repeated samples and a machine-readable report.
+argus eval suite.json --samples 5 --report-json .argus/eval/report.json
+
+# Quantify the value of the verification gate: final verify still decides pass/fail.
+argus eval suite.json --no-gate
+
+# Default eval runs in isolated temp workspaces. Opt into original-directory runs explicitly.
+argus eval suite.json --in-place
 ```
-*(MVP runs each case in place without auto-reset — keep fixtures clean between runs; results are a single-run snapshot.)*
+By default, each eval attempt runs in an isolated temporary workspace; `"reset": "git"` uses a temporary git worktree. Use `--in-place` only when you intentionally want the old original-directory behavior. Use `"reset": "git"` to restore a case directory before and after each sample, or `"reset": {"command": "..."}` for a custom reset command. `--samples` reports attempt pass-rate with a Wilson 95% confidence interval; `--no-gate` disables agent self-repair but keeps the final verification gate as the source of truth.
 
 ### 💸 Cost-smart routing — cheap first, escalate on failure
 
@@ -194,6 +239,8 @@ cost: $0.0123 actual (cheap $0.0021 + strong $0.0102); vs always-strong $0.0150 
 ```bash
 argus trace fork .argus/a.jsonl --provider anthropic \
   --model claude-3-5-haiku-latest --out .argus/b.jsonl   # re-run the same task, different model
+argus trace fork .argus/a.jsonl --step 5 --provider anthropic \
+  --model claude-sonnet-4-5 --out .argus/from-step-5.jsonl
 argus trace diff .argus/a.jsonl .argus/b.jsonl           # side-by-side
 ```
 
@@ -204,8 +251,10 @@ argus trace diff .argus/a.jsonl .argus/b.jsonl           # side-by-side
 argus run "add a test for the parser" --provider anthropic --model claude-sonnet-4-5
 # (loaded rules from AGENTS.md)    — or --rules <file> / --no-rules
 
-# Connect any MCP server; its tools are injected (behind the approval gate)
+# Connect any MCP server; allowed tools are injected behind the approval gate.
+# When --yes is used with --mcp, every external tool must be allowlisted.
 argus run "search the docs and summarize" --provider anthropic --model claude-sonnet-4-5 --yes \
+  --mcp-allow search \
   --mcp "npx -y @modelcontextprotocol/server-everything"
 ```
 
@@ -219,25 +268,40 @@ Right pane = the timeline (↑/↓ or j/k to select, `q` to quit); left pane = t
 
 ### 🔧 Tools
 
-Argus runs a real multi-turn loop — the model calls tools, Argus executes them and feeds results back until done:
+Argus runs a real multi-turn loop — the model calls tools, Argus applies the sandbox policy, executes allowed tools, and feeds results back until done:
 
 - `read_file { path }` / `write_file { path, content }` — UTF-8 files within the working directory
 - `list_files { contains? }` / `search_text { pattern }` — explore the codebase (read-only, no approval needed)
-- `run_shell { command }` — shell command in the working directory (**requires approval**; `--yes` to auto-approve)
+- `run_shell { command }` — shell command in the working directory (**requires approval**; `--yes` to auto-approve; timed out and output-capped)
 - any tools from a connected MCP server (`--mcp`)
+
+Sandbox modes:
+
+- `--sandbox workspace-write` (default): read/search/write workspace files; shell and MCP tools require approval.
+- `--sandbox read-only`: read/search only; write, shell, and MCP tools are denied even with `--yes`.
+- `--sandbox trusted`: allow all tool kinds, intended for trusted automation such as eval/route runs.
+- `argus policy show --sandbox read-only`: print the exact allow/ask/deny table.
+- `argus doctor`: check the local binary, git availability, and provider environment.
+
+Current sandboxing is a workspace/policy boundary, not an OS-level container sandbox. Eval uses isolated temp workspaces by default; use containers or OS sandboxes around Argus for hostile code.
+
+Every tool call records a `POLICY` event in the trace so approvals and denials are auditable.
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `argus run <task> [--provider P] [--model M] [--verify CMD] [--yes] [--base-url URL] [--rules F\|--no-rules] [--mcp "CMD"] [--trace PATH]` | Run a task; record every step to a JSONL trace; verify completion; auto-load rules; inject MCP tools |
+| `argus run <task> [--provider P] [--model M] [--verify CMD] [--yes] [--sandbox MODE] [--base-url URL] [--rules F\|--no-rules] [--mcp "CMD"] [--mcp-allow TOOL] [--trace PATH]` | Run a task; record every step to a JSONL trace; verify completion; auto-load rules; inject allowlisted MCP tools |
 | `argus trace show [PATH]` | Replay a trace as a readable timeline |
-| `argus trace fork <trace> [--provider P] [--model M] [--out PATH]` | Re-run a trace's task with a different provider/model |
+| `argus trace fork <trace> [--step N] [--provider P] [--model M] [--out PATH]` | Re-run a trace's task with a different provider/model, optionally injecting context through step `N` |
 | `argus trace diff <a> <b>` | Compare two traces step by step |
-| `argus eval <suite.json> [--provider P] [--model M] [--out-dir DIR]` | Batch-run an eval suite; report pass-rate; exit non-zero on any failure |
+| `argus eval <suite.json> [--provider P] [--model M] [--out-dir DIR] [--samples N] [--no-gate] [--report-json PATH] [--in-place]` | Batch-run an eval suite in isolated temp workspaces by default; report pass-rate; exit non-zero on any failure |
 | `argus route <task> --cheap M1 --strong M2 --verify CMD [--provider P]` | Cheap model first, escalate on verification failure; report cost saved |
 | `argus tui [trace]` | Browse a trace in an interactive two-pane TUI |
-| `argus mcp-serve` | Run Argus as an MCP server (exposes `verify` to Claude Code / Cursor / any MCP host) |
+| `argus mcp-serve --workspace <repo> [--allow-tool eval] [--allow-tool route]` | Run Argus as an MCP server. Default exposes only `verify`; `eval` and `route` are opt-in |
+| `argus demo` | Run a zero-config verification-gate demo and write a replayable trace |
+| `argus doctor` | Check binary, git, MCP guidance, and provider API-key environment |
+| `argus policy show [--sandbox MODE]` | Explain allow/ask/deny decisions for read/write/shell/MCP operations |
 
 ## How it works — the black box
 
@@ -247,14 +311,12 @@ Three crates: `argus-trace` (the open black box) · `argus-core` (model-agnostic
 
 ## Roadmap
 
-**✅ Shipped (v1.0 feature set)** — agent loop · multi-turn tools + approval gate · black-box trace · time-travel fork/diff · verification gate · Eval engine · cost-smart routing · rules import · MCP client + server · TUI · Anthropic / OpenAI / compatible providers.
+**✅ Shipped (v1.0 feature set)** — agent loop · multi-turn tools + sandbox policy audit · approval gate · black-box trace · time-travel fork/diff · verification gate · isolated Eval engine · cost-smart routing · rules import · MCP client/server allowlists · TUI · Anthropic / OpenAI / compatible providers · release automation.
 
 **Next**
-- 📦 Release engineering: prebuilt binaries, `curl | sh` installer, crates.io
-- 🧱 Hardened tool sandbox
-- 🧰 More `mcp-serve` tools (expose `eval` / `route` to host agents)
+- 📦 First public release: publish GitHub assets and checksum archives
+- 🧱 Deeper sandbox isolation: container/OS sandbox profiles and command allow policies
 - 🌊 Streaming output in the TUI
-- 🔁 Eval with repeated sampling (statistical pass-rate, not single-snapshot)
 
 **Later** — drift guard · 24/7 multi-channel runs · lightweight governance · hosted option.
 

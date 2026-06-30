@@ -3,6 +3,7 @@
 use crate::agent::Agent;
 use crate::approver::AutoApprover;
 use crate::cost::estimate_cost;
+use crate::policy::SandboxPolicy;
 use crate::provider::Provider;
 use crate::tool::{ReadFile, RunShell, WriteFile};
 use crate::verifier::{CommandVerifier, Verifier, VerifyResult};
@@ -48,6 +49,7 @@ async fn run_one(
                 Box::new(RunShell::new(work_dir)),
             ])
             .with_approver(Box::new(AutoApprover))
+            .with_policy(SandboxPolicy::trusted())
             .with_verifier(Box::new(CommandVerifier::new(
                 work_dir,
                 verify_cmds.to_vec(),

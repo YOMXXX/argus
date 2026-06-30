@@ -5,19 +5,22 @@
       "id": "fix-fibonacci",
       "task": "There is a bug in fib.py. Fix it so that running `python3 test_fib.py` passes.",
       "dir": "cases/fix-fibonacci",
-      "verify": ["python3 test_fib.py"]
+      "verify": ["python3 test_fib.py"],
+      "reset": "git"
     },
     {
       "id": "impl-isprime",
       "task": "Implement the is_prime function in is_prime.py so that `python3 test_is_prime.py` passes.",
       "dir": "cases/impl-isprime",
-      "verify": ["python3 test_is_prime.py"]
+      "verify": ["python3 test_is_prime.py"],
+      "reset": "git"
     },
     {
       "id": "edge-parse",
       "task": "Make parse_int_list in parse.py handle empty strings and surrounding whitespace so that `python3 test_parse.py` passes.",
       "dir": "cases/edge-parse",
-      "verify": ["python3 test_parse.py"]
+      "verify": ["python3 test_parse.py"],
+      "reset": "git"
     }
   ]
 }

@@ -25,6 +25,7 @@ async-trait = "0.1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "time", "io-util", "io-std"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 wiremock = "0.6"
-argus-trace = { path = "crates/argus-trace" }
-argus-core = { path = "crates/argus-core" }
+libc = "0.2"
+argus-trace = { path = "crates/argus-trace", version = "0.1.0" }
+argus-core = { path = "crates/argus-core", version = "0.1.0" }
 ratatui = "0.29"

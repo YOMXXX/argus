@@ -1,7 +1,9 @@
 //! 验证护栏：在 agent 声称完成前跑校验（测试/编译/lint）。
 
+use crate::command::{CommandRunner, ExecutionLimits};
 use async_trait::async_trait;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// 一次验证的结果。
 #[derive(Debug, Clone, PartialEq)]
@@ -20,44 +22,57 @@ pub trait Verifier: Send + Sync {
 pub struct CommandVerifier {
     root: PathBuf,
     commands: Vec<String>,
+    timeout: Duration,
 }
 
 impl CommandVerifier {
     pub fn new(root: impl Into<PathBuf>, commands: Vec<String>) -> Self {
+        Self::with_timeout(root, commands, Duration::from_secs(30))
+    }
+
+    pub fn with_timeout(
+        root: impl Into<PathBuf>,
+        commands: Vec<String>,
+        timeout: Duration,
+    ) -> Self {
         Self {
             root: root.into(),
             commands,
+            timeout,
         }
+    }
+
+    fn runner(&self) -> CommandRunner {
+        CommandRunner::with_limits(
+            &self.root,
+            ExecutionLimits {
+                timeout: self.timeout,
+                ..ExecutionLimits::default()
+            },
+        )
     }
 }
 
 #[async_trait]
 impl Verifier for CommandVerifier {
     async fn verify(&self) -> VerifyResult {
+        let runner = self.runner();
         for cmd in &self.commands {
-            let output = match tokio::process::Command::new("sh")
-                .arg("-c")
-                .arg(cmd)
-                .current_dir(&self.root)
-                .output()
-                .await
-            {
-                Ok(o) => o,
+            let output = match runner.run_shell(cmd).await {
+                Ok(output) => output,
                 Err(e) => {
                     return VerifyResult {
                         passed: false,
-                        detail: format!("`{cmd}` failed to spawn: {e}"),
+                        detail: format!("`{cmd}` {e}"),
                     }
                 }
             };
             if !output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
                 return VerifyResult {
                     passed: false,
                     detail: format!(
-                        "`{cmd}` exited {}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
-                        output.status
+                        "`{cmd}` exited {}\n--- stdout ---\n{}\n--- stderr ---\n{}",
+                        output.status, output.stdout, output.stderr
                     ),
                 };
             }
@@ -99,6 +114,17 @@ mod tests {
         let r = v.verify().await;
         assert!(!r.passed);
         assert!(r.detail.contains("boom"), "detail: {}", r.detail);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn times_out_long_running_commands() {
+        let root = tmp_root("timeout");
+        let v =
+            CommandVerifier::with_timeout(&root, vec!["sleep 1".into()], Duration::from_millis(10));
+        let r = v.verify().await;
+        assert!(!r.passed);
+        assert!(r.detail.contains("timed out"), "detail: {}", r.detail);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -8,8 +8,31 @@ permissions:
   contents: write
 
 jobs:
+  validate:
+    name: validate release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Check tag matches Cargo version
+        run: scripts/check-release-version.sh "${GITHUB_REF_NAME}"
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --workspace --locked
+      - name: Check package metadata
+        run: |
+          cargo metadata --locked --format-version 1 >/dev/null
+          cargo package -p argus-trace --locked
+
   build:
     name: build ${{ matrix.target }}
+    needs: validate
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -29,12 +52,29 @@ jobs:
         run: cargo build --release --locked --target ${{ matrix.target }} -p argus-cli
       - name: Package
         shell: bash
-        run: |
-          bin="argus"
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then bin="argus.exe"; fi
-          dir="target/${{ matrix.target }}/release"
-          tar -czf "argus-${{ matrix.target }}.tar.gz" -C "$dir" "$bin"
+        run: scripts/package-release.sh "${{ matrix.target }}"
+      - name: Upload release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: argus-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  publish:
+    name: publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: argus-${{ matrix.target }}.tar.gz
+          body_path: CHANGELOG.md
+          files: |
+            release-assets/*.tar.gz
+            release-assets/*.sha256

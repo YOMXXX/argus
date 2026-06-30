@@ -1,9 +1,10 @@
 //! 工具抽象与内置文件工具（限工作目录）。
 
+use crate::command::CommandRunner;
+use crate::policy::OperationKind;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 #[async_trait]
 pub trait Tool: Send + Sync {
@@ -15,13 +16,20 @@ pub trait Tool: Send + Sync {
     fn requires_approval(&self) -> bool {
         false
     }
+    fn operation_kind(&self) -> OperationKind {
+        if self.requires_approval() {
+            OperationKind::Mcp
+        } else {
+            OperationKind::Read
+        }
+    }
 }
 
-/// 把相对路径限制在 root 之内，拒绝逃逸（.. / 绝对路径越界）。
-/// 注意：不防护符号链接逃逸——root 内若有指向外部的 symlink 仍可能被跟随；
-/// 调用方需保证 root 内无恶意 symlink（agent 的 write_file 只写文本、不创建 symlink）。
+/// 把相对路径限制在 root 之内，拒绝 `..`、绝对路径和符号链接逃逸。
 fn safe_join(root: &Path, rel: &str) -> anyhow::Result<PathBuf> {
-    let root_abs = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let root_abs = root
+        .canonicalize()
+        .map_err(|e| anyhow::anyhow!("failed to resolve working directory: {e}"))?;
     let mut normalized = root_abs.clone();
     for comp in Path::new(rel).components() {
         use std::path::Component::*;
@@ -37,7 +45,39 @@ fn safe_join(root: &Path, rel: &str) -> anyhow::Result<PathBuf> {
     if !normalized.starts_with(&root_abs) {
         anyhow::bail!("path escapes working directory: {rel}");
     }
+    ensure_resolved_path_stays_in_root(&root_abs, &normalized, rel)?;
     Ok(normalized)
+}
+
+fn ensure_resolved_path_stays_in_root(
+    root_abs: &Path,
+    path: &Path,
+    rel: &str,
+) -> anyhow::Result<()> {
+    if std::fs::symlink_metadata(path).is_ok() {
+        let resolved = path
+            .canonicalize()
+            .map_err(|e| anyhow::anyhow!("failed to resolve path {rel}: {e}"))?;
+        if !resolved.starts_with(root_abs) {
+            anyhow::bail!("path escapes working directory: {rel}");
+        }
+        return Ok(());
+    }
+
+    let mut ancestor = path.parent();
+    while let Some(parent) = ancestor {
+        if std::fs::symlink_metadata(parent).is_ok() {
+            let resolved = parent
+                .canonicalize()
+                .map_err(|e| anyhow::anyhow!("failed to resolve parent for {rel}: {e}"))?;
+            if !resolved.starts_with(root_abs) {
+                anyhow::bail!("path escapes working directory: {rel}");
+            }
+            return Ok(());
+        }
+        ancestor = parent.parent();
+    }
+    anyhow::bail!("path escapes working directory: {rel}");
 }
 
 pub struct ReadFile {
@@ -90,6 +130,9 @@ impl Tool for WriteFile {
     fn input_schema(&self) -> Value {
         json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false})
     }
+    fn operation_kind(&self) -> OperationKind {
+        OperationKind::Write
+    }
     async fn execute(&self, input: &Value) -> anyhow::Result<String> {
         let rel = input
             .get("path")
@@ -107,8 +150,6 @@ impl Tool for WriteFile {
         Ok(format!("wrote {} bytes to {rel}", content.len()))
     }
 }
-
-const SHELL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 在工作目录内执行 shell 命令（`sh -c`），带超时。需审批。
 pub struct RunShell {
@@ -134,26 +175,18 @@ impl Tool for RunShell {
     fn requires_approval(&self) -> bool {
         true
     }
+    fn operation_kind(&self) -> OperationKind {
+        OperationKind::Shell
+    }
     async fn execute(&self, input: &Value) -> anyhow::Result<String> {
         let command = input
             .get("command")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("run_shell: missing 'command'"))?;
-        let fut = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(command)
-            .current_dir(&self.root)
-            .output();
-        let output = tokio::time::timeout(SHELL_TIMEOUT, fut)
-            .await
-            .map_err(|_| {
-                anyhow::anyhow!("run_shell: timed out after {}s", SHELL_TIMEOUT.as_secs())
-            })??;
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        let output = CommandRunner::new(&self.root).run_shell(command).await?;
         Ok(format!(
             "exit: {}\n--- stdout ---\n{}\n--- stderr ---\n{}",
-            output.status, stdout, stderr
+            output.status, output.stdout, output.stderr
         ))
     }
 }
@@ -176,10 +209,19 @@ fn walk_files(root: &Path) -> Vec<String> {
             if name.starts_with('.') || IGNORE_DIRS.contains(&name.as_str()) {
                 continue;
             }
-            if path.is_dir() {
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
                 stack.push(path);
-            } else if let Ok(rel) = path.strip_prefix(root) {
-                out.push(rel.to_string_lossy().to_string());
+            } else if file_type.is_file() {
+                if let Ok(rel) = path.strip_prefix(root) {
+                    out.push(rel.to_string_lossy().to_string());
+                }
             }
         }
     }
@@ -314,6 +356,41 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn read_file_rejects_symlink_escape() {
+        let root = tmp_root("read-symlink");
+        let outside = tmp_root("read-symlink-outside");
+        std::fs::write(outside.join("secret.txt"), "secret").unwrap();
+        std::os::unix::fs::symlink(outside.join("secret.txt"), root.join("secret-link")).unwrap();
+
+        let r = ReadFile::new(&root);
+        let err = r.execute(&json!({"path":"secret-link"})).await.unwrap_err();
+
+        assert!(format!("{err}").contains("escapes working directory"));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_file_rejects_symlink_parent_escape() {
+        let root = tmp_root("write-symlink");
+        let outside = tmp_root("write-symlink-outside");
+        std::os::unix::fs::symlink(&outside, root.join("outside-link")).unwrap();
+
+        let w = WriteFile::new(&root);
+        let err = w
+            .execute(&json!({"path":"outside-link/pwn.txt","content":"pwn"}))
+            .await
+            .unwrap_err();
+
+        assert!(format!("{err}").contains("escapes working directory"));
+        assert!(!outside.join("pwn.txt").exists());
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
     #[tokio::test]
     async fn run_shell_executes_and_captures_output() {
         let root = tmp_root("shell");
@@ -354,6 +431,29 @@ mod tests {
         assert!(!filtered.contains("a.txt"));
         assert!(!lf.requires_approval());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn list_files_does_not_follow_symlink_dirs() {
+        let root = tmp_root("ls-symlink");
+        let outside = tmp_root("ls-symlink-outside");
+        std::fs::write(outside.join("secret.txt"), "secret").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("outside-link")).unwrap();
+
+        let lf = ListFiles::new(&root);
+        let all = lf.execute(&json!({})).await.unwrap();
+
+        assert!(
+            !all.contains("secret.txt"),
+            "should not follow symlink: {all}"
+        );
+        assert!(
+            !all.contains("outside-link"),
+            "should not list symlink dir as file: {all}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 
     #[tokio::test]

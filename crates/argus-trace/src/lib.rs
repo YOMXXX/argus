@@ -49,6 +49,12 @@ pub enum EventKind {
         ok: bool,
         output: String,
     },
+    PolicyDecision {
+        tool_name: String,
+        operation: String,
+        decision: String,
+        reason: String,
+    },
     Diff {
         path: String,
         patch: String,
@@ -230,6 +236,24 @@ mod tests {
             },
         };
         let json = serde_json::to_string(&event).unwrap();
+        let back: TraceEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(event, back);
+    }
+
+    #[test]
+    fn policy_decision_roundtrip() {
+        let event = TraceEvent {
+            step: 10,
+            ts_ms: 9013,
+            kind: EventKind::PolicyDecision {
+                tool_name: "write_file".into(),
+                operation: "write".into(),
+                decision: "deny".into(),
+                reason: "read-only policy denies write_file".into(),
+            },
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"policy_decision\""));
         let back: TraceEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, back);
     }

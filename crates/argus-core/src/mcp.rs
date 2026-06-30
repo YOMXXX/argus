@@ -2,10 +2,12 @@
 //!
 //! stdio transport:每条 JSON-RPC 2.0 消息一行(`\n` 分隔)。
 
+use crate::policy::OperationKind;
 use crate::tool::Tool;
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
@@ -202,13 +204,53 @@ impl<R: AsyncRead + Unpin + Send, W: AsyncWrite + Unpin + Send> Tool for McpTool
     fn requires_approval(&self) -> bool {
         true
     }
+    fn operation_kind(&self) -> OperationKind {
+        OperationKind::Mcp
+    }
 }
 
-/// spawn 一个 MCP server 并把它的全部工具包装为 `Box<dyn Tool>`。
+fn filter_tool_defs(
+    defs: Vec<McpToolDef>,
+    allowed_tools: Option<&[String]>,
+) -> Result<Vec<McpToolDef>> {
+    let Some(allowed_tools) = allowed_tools else {
+        return Ok(defs);
+    };
+    let allowed = allowed_tools
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let available = defs
+        .iter()
+        .map(|d| d.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let missing = allowed.difference(&available).copied().collect::<Vec<_>>();
+    if !missing.is_empty() {
+        anyhow::bail!(
+            "MCP allowlist contains unknown tool(s): {} (available: {})",
+            missing.join(", "),
+            available.into_iter().collect::<Vec<_>>().join(", ")
+        );
+    }
+    let filtered = defs
+        .into_iter()
+        .filter(|d| allowed.contains(d.name.as_str()))
+        .collect::<Vec<_>>();
+    if filtered.is_empty() {
+        anyhow::bail!("MCP allowlist did not match any tools");
+    }
+    Ok(filtered)
+}
+
+/// spawn 一个 MCP server 并把允许的工具包装为 `Box<dyn Tool>`。
 /// 返回的工具共享同一连接(Arc<Mutex>);连接随最后一个工具 drop 而关闭(子进程被杀)。
-pub async fn mcp_connect(command: &str, args: &[String]) -> Result<Vec<Box<dyn Tool>>> {
+pub async fn mcp_connect(
+    command: &str,
+    args: &[String],
+    allowed_tools: Option<&[String]>,
+) -> Result<Vec<Box<dyn Tool>>> {
     let mut client = McpClient::spawn(command, args).await?;
-    let defs = client.list_tools().await?;
+    let defs = filter_tool_defs(client.list_tools().await?, allowed_tools)?;
     let shared = Arc::new(Mutex::new(client));
     let tools: Vec<Box<dyn Tool>> = defs
         .into_iter()
@@ -313,5 +355,44 @@ mod tests {
         let tools = client.list_tools().await.unwrap();
         assert!(tools.is_empty());
         server.await.unwrap();
+    }
+
+    #[test]
+    fn filter_tool_defs_keeps_only_allowed_tools() {
+        let defs = vec![
+            McpToolDef {
+                name: "safe".into(),
+                description: "safe tool".into(),
+                input_schema: json!({"type": "object"}),
+            },
+            McpToolDef {
+                name: "danger".into(),
+                description: "danger tool".into(),
+                input_schema: json!({"type": "object"}),
+            },
+        ];
+        let allowed = vec!["safe".to_string()];
+
+        let filtered = filter_tool_defs(defs, Some(&allowed)).unwrap();
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "safe");
+    }
+
+    #[test]
+    fn filter_tool_defs_errors_when_allowlist_matches_nothing() {
+        let defs = vec![McpToolDef {
+            name: "safe".into(),
+            description: "safe tool".into(),
+            input_schema: json!({"type": "object"}),
+        }];
+        let allowed = vec!["missing".to_string()];
+
+        let err = filter_tool_defs(defs, Some(&allowed)).unwrap_err();
+
+        assert!(
+            format!("{err}").contains("MCP allowlist contains unknown tool"),
+            "err: {err}"
+        );
     }
 }

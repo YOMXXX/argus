@@ -19,11 +19,20 @@ coding tasks, each with an objective pass/fail check:
 ```
 
 Output is a pass-rate, e.g. `3/3 passed (100%)`, plus a per-case trace under
-`.argus/eval/` you can replay with `argus tui`. Fixtures are git-restored before and
-after each run, so it's reproducible.
+`.argus/eval/` you can replay with `argus tui`. Each benchmark case uses
+`"reset": "git"` so Argus runs it in a clean temporary worktree by default without
+mutating the benchmark fixtures. Use `--in-place` only when intentionally testing
+the old original-directory behavior.
 
 Works with any provider: swap `--provider openai --model gpt-4o-mini`, or point at a
 local model with `--base-url http://localhost:11434/v1`.
+
+For stability measurements, repeat each case and write a JSON report:
+
+```bash
+./benchmarks/run-benchmark.sh --provider anthropic --model claude-sonnet-4-5 \
+  --samples 5 --report-json .argus/eval/report.json
+```
 
 ## The headline number
 
@@ -32,9 +41,12 @@ is the "proves it works" evidence that sets Argus apart:
 
 | Model | Pass-rate |
 |---|---|
+| deepseek-v4-pro | 15/15 attempts passed (100%, gate on, samples=5, 95% CI 80%-100%; 2026-06-30) |
 | claude-sonnet-4-5 | _run it_ |
 | gpt-4o-mini | _run it_ |
 | local llama3.1 | _run it_ |
+
+Tracked summary: [`results/deepseek-v4-pro-2026-06-30.md`](results/deepseek-v4-pro-2026-06-30.md).
 
 ## Demo gif
 
@@ -47,7 +59,25 @@ vhs benchmarks/demo.tape   # produces demo.gif
 
 ## Advanced: quantify the gate's value
 
-The strongest story is *gate-on vs gate-off pass-rate*. Today `argus eval` always runs
-with the gate on (the agent self-corrects until the checks pass). A future flag
-(`--no-gate`) will let you run the same suite without self-correction and chart the
-delta — that delta is the verification gate's measurable value.
+The strongest story is *gate-on vs gate-off pass-rate*. Run the same suite twice,
+once with the default self-repair gate and once with `--no-gate`:
+
+```bash
+./benchmarks/run-benchmark.sh --provider anthropic --model claude-sonnet-4-5 \
+  --samples 5 --report-json .argus/eval/gate-on.json
+./benchmarks/run-benchmark.sh --provider anthropic --model claude-sonnet-4-5 \
+  --samples 5 --no-gate --report-json .argus/eval/gate-off.json
+```
+
+`--no-gate` disables agent self-correction only; final verification still decides
+pass/fail and the command still exits non-zero when any case fails.
+
+Latest DeepSeek V4 Pro comparison:
+
+| Run | Attempts | Cases | Wilson 95% CI |
+|---|---:|---:|---:|
+| Gate on | 15/15 | 3/3 | 80%-100% |
+| Gate off | 14/15 | 2/3 | 70%-99% |
+
+The one no-gate failed attempt ended with a provider response decoding error, not a
+verified programming-task failure.
