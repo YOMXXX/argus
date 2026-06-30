@@ -1,5 +1,6 @@
 use crate::config::{ArgusCodeConfig, CONFIG_PATH};
 use crate::diff::load_diff_preview;
+use crate::eval_dashboard::load_eval_dashboard;
 use crate::harness::{run_task_through_harness, HarnessRunOutput};
 use crate::project::{detect_project, init_project, ProjectProfile};
 use crate::repo_map::load_repo_map;
@@ -103,10 +104,20 @@ pub struct WorkbenchApp {
     pub diff_preview: String,
     pub trace_preview: TracePreview,
     pub repo_map: String,
+    pub eval_dashboard: String,
     pub terminal_log: Vec<String>,
     pub latest_trace_path: Option<PathBuf>,
     pub input: String,
     pub status: String,
+}
+
+struct WorkbenchLoadedData {
+    task_queue: Vec<TaskRecord>,
+    session_history: Vec<SessionRecord>,
+    diff_preview: String,
+    trace_preview: TracePreview,
+    repo_map: String,
+    eval_dashboard: String,
 }
 
 impl WorkbenchApp {
@@ -114,11 +125,14 @@ impl WorkbenchApp {
         Self::with_state(
             profile,
             config,
-            Vec::new(),
-            Vec::new(),
-            "(not loaded)".into(),
-            TracePreview::empty(),
-            "(not loaded)".into(),
+            WorkbenchLoadedData {
+                task_queue: Vec::new(),
+                session_history: Vec::new(),
+                diff_preview: "(not loaded)".into(),
+                trace_preview: TracePreview::empty(),
+                repo_map: "(not loaded)".into(),
+                eval_dashboard: "(not loaded)".into(),
+            },
         )
     }
 
@@ -129,38 +143,42 @@ impl WorkbenchApp {
         let latest_trace_path = session_history.last().map(|session| session.trace.clone());
         let trace_preview = load_trace_preview(&profile.root, latest_trace_path.as_deref());
         let repo_map = load_repo_map(&profile.root, &profile, &config)?;
+        let eval_dashboard = load_eval_dashboard(&profile.root)?;
         Ok(Self::with_state(
             profile,
             config,
-            task_queue,
-            session_history,
-            diff_preview,
-            trace_preview,
-            repo_map,
+            WorkbenchLoadedData {
+                task_queue,
+                session_history,
+                diff_preview,
+                trace_preview,
+                repo_map,
+                eval_dashboard,
+            },
         ))
     }
 
     fn with_state(
         profile: ProjectProfile,
         config: ArgusCodeConfig,
-        task_queue: Vec<TaskRecord>,
-        session_history: Vec<SessionRecord>,
-        diff_preview: String,
-        trace_preview: TracePreview,
-        repo_map: String,
+        data: WorkbenchLoadedData,
     ) -> Self {
-        let latest_trace_path = session_history.last().map(|session| session.trace.clone());
+        let latest_trace_path = data
+            .session_history
+            .last()
+            .map(|session| session.trace.clone());
         Self {
             profile,
             config,
             active_pane: WorkbenchPane::Session,
             mode: WorkbenchMode::Normal,
             palette_selected: 0,
-            task_queue,
-            session_history,
-            diff_preview,
-            trace_preview,
-            repo_map,
+            task_queue: data.task_queue,
+            session_history: data.session_history,
+            diff_preview: data.diff_preview,
+            trace_preview: data.trace_preview,
+            repo_map: data.repo_map,
+            eval_dashboard: data.eval_dashboard,
             terminal_log: Vec::new(),
             latest_trace_path,
             input: String::new(),
@@ -289,6 +307,7 @@ impl WorkbenchApp {
             }
             "/diff" => self.refresh_diff_preview(),
             "/map" => self.refresh_repo_map(),
+            "/eval" | "/evals" => self.refresh_eval_dashboard(),
             "/tasks" => self.show_task_queue(),
             "/cancel" => self.update_task_status_from_command(
                 args.first().copied(),
@@ -421,6 +440,19 @@ impl WorkbenchApp {
             }
             Err(err) => {
                 self.status = format!("Could not refresh repo map: {err}");
+            }
+        }
+    }
+
+    fn refresh_eval_dashboard(&mut self) {
+        self.active_pane = WorkbenchPane::Trace;
+        match load_eval_dashboard(&self.profile.root) {
+            Ok(dashboard) => {
+                self.eval_dashboard = dashboard;
+                self.status = "Eval dashboard refreshed.".into();
+            }
+            Err(err) => {
+                self.status = format!("Could not refresh eval dashboard: {err}");
             }
         }
     }
@@ -924,6 +956,10 @@ fn render_trace(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
     lines.push(Line::from("Memory"));
     lines.push(Line::from(app.config.memory.project.clone()));
     lines.push(Line::from(""));
+    for line in app.eval_dashboard.lines().take(10) {
+        lines.push(Line::from(line.to_string()));
+    }
+    lines.push(Line::from(""));
     lines.push(Line::from("Session History"));
     if app.session_history.is_empty() {
         lines.push(Line::from("(empty)"));
@@ -1022,6 +1058,7 @@ Slash commands\n\
 /verify  Run verification gate\n\
 /run     Run latest queued task\n\
 /map     Refresh repo map\n\
+/evals   Refresh eval dashboard\n\
 /tasks   Show task queue\n\
 /cancel  Cancel a task by id\n\
 /retry   Requeue a task by id\n\
@@ -1579,6 +1616,85 @@ mod tests {
         assert_eq!(app.active_pane, WorkbenchPane::Project);
         assert!(app.status.contains("Repo map refreshed"), "{}", app.status);
         assert!(app.repo_map.contains("tests"), "{}", app.repo_map);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workbench_loads_and_renders_eval_dashboard() {
+        let dir = temp_dir("eval-dashboard");
+        std::fs::create_dir_all(dir.join(".argus/evals")).unwrap();
+        std::fs::write(
+            dir.join(".argus/evals/smoke.json"),
+            r#"{"name":"demo smoke","cases":[{"id":"smoke","task":"check","verify":["cargo test"]}]}"#,
+        )
+        .unwrap();
+        let seed = app_with_root(dir.clone());
+
+        let app = WorkbenchApp::load(seed.profile, seed.config).unwrap();
+
+        assert!(
+            app.eval_dashboard.contains("Eval Dashboard"),
+            "{}",
+            app.eval_dashboard
+        );
+        assert!(
+            app.eval_dashboard.contains("demo smoke"),
+            "{}",
+            app.eval_dashboard
+        );
+        assert!(
+            app.eval_dashboard.contains("smoke"),
+            "{}",
+            app.eval_dashboard
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 36)).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("Eval Dashboard"), "{text}");
+        assert!(text.contains("demo smoke"), "{text}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_evals_refreshes_dashboard_without_queueing_task() {
+        let dir = temp_dir("slash-evals");
+        std::fs::create_dir_all(dir.join(".argus/evals")).unwrap();
+        let seed = app_with_root(dir.clone());
+        let mut app = WorkbenchApp::load(seed.profile, seed.config).unwrap();
+        app.eval_dashboard = "stale".into();
+        std::fs::write(
+            dir.join(".argus/evals/regression.json"),
+            r#"{"name":"regression","cases":[{"id":"case-a","task":"fix","verify":["true"]}]}"#,
+        )
+        .unwrap();
+
+        for c in "/evals".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert!(app.task_queue.is_empty(), "{:?}", app.task_queue);
+        assert!(list_tasks(&dir).unwrap().is_empty());
+        assert_eq!(app.active_pane, WorkbenchPane::Trace);
+        assert!(
+            app.status.contains("Eval dashboard refreshed"),
+            "{}",
+            app.status
+        );
+        assert!(
+            app.eval_dashboard.contains("regression"),
+            "{}",
+            app.eval_dashboard
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

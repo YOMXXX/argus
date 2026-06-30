@@ -25,6 +25,7 @@
 - Added Workbench task queue slash commands for listing, canceling, and requeueing tasks.
 - Added ArgusCode security profiles for sandbox and approval mode, with Workbench slash commands and harness argument mapping.
 - Added Workbench repo map scanning for codebase shape, top directories, extensions, rules, and verify commands.
+- Added Workbench eval dashboard scanning for `.argus/evals/*.json` suites and cases.
 - Updated release packaging and installer support so archives install both `argus` and `arguscode`.
 
 ## 0.1.1 - 2026-06-30

@@ -126,6 +126,7 @@ arguscode
 # Manage the queue in-session with /tasks, /cancel <task-id>, and /retry <task-id>.
 # Tune execution safety with /sandbox read-only|workspace-write|trusted and /approval auto|ask.
 # Refresh codebase shape with /map for top directories, extensions, rules, and verify commands.
+# Inspect eval suites with /evals before running regression gates.
 
 # Generate config, project memory, and a smoke eval without opening the TUI.
 arguscode init
