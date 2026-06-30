@@ -28,15 +28,19 @@ fn host_target() -> Option<&'static str> {
     }
 }
 
-fn write_fake_argus(dir: &Path) -> PathBuf {
+fn write_fake_bins(dir: &Path) -> (PathBuf, PathBuf) {
     std::fs::create_dir_all(dir).unwrap();
-    let bin = dir.join("argus");
-    std::fs::write(&bin, "#!/bin/sh\necho argus 0.1.1-test\n").unwrap();
-    let mut perms = std::fs::metadata(&bin).unwrap().permissions();
-    use std::os::unix::fs::PermissionsExt;
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&bin, perms).unwrap();
-    bin
+    let argus = dir.join("argus");
+    let arguscode = dir.join("arguscode");
+    std::fs::write(&argus, "#!/bin/sh\necho argus 0.1.1-test\n").unwrap();
+    std::fs::write(&arguscode, "#!/bin/sh\necho arguscode 0.1.1-test\n").unwrap();
+    for bin in [&argus, &arguscode] {
+        let mut perms = std::fs::metadata(bin).unwrap().permissions();
+        use std::os::unix::fs::PermissionsExt;
+        perms.set_mode(0o755);
+        std::fs::set_permissions(bin, perms).unwrap();
+    }
+    (argus, arguscode)
 }
 
 fn sha256(path: &Path) -> String {
@@ -90,13 +94,14 @@ fn package_release_script_writes_archive_and_checksum() {
     };
     let root = repo_root();
     let base = temp_dir("package-release");
-    let fake_bin = write_fake_argus(&base.join("bin"));
+    let (fake_argus, fake_arguscode) = write_fake_bins(&base.join("bin"));
     let dist = base.join("dist");
 
     let out = Command::new("sh")
         .arg(root.join("scripts/package-release.sh"))
         .arg(target)
-        .env("ARGUS_BIN_PATH", &fake_bin)
+        .env("ARGUS_BIN_PATH", &fake_argus)
+        .env("ARGUSCODE_BIN_PATH", &fake_arguscode)
         .env("ARGUS_DIST_DIR", &dist)
         .current_dir(&root)
         .output()
@@ -122,6 +127,10 @@ fn package_release_script_writes_archive_and_checksum() {
     assert!(
         listing.contains("argus"),
         "archive should include binary: {listing}"
+    );
+    assert!(
+        listing.contains("arguscode"),
+        "archive should include ArgusCode binary: {listing}"
     );
     assert!(
         listing.contains("README.md"),
@@ -150,7 +159,7 @@ fn installer_installs_local_release_and_verifies_checksum() {
     let staging = base.join("staging");
     let dest = base.join("bin");
     std::fs::create_dir_all(&release).unwrap();
-    write_fake_argus(&staging);
+    write_fake_bins(&staging);
 
     let archive = release.join(format!("argus-{target}.tar.gz"));
     let tar = Command::new("tar")
@@ -159,6 +168,7 @@ fn installer_installs_local_release_and_verifies_checksum() {
         .arg("-C")
         .arg(&staging)
         .arg("argus")
+        .arg("arguscode")
         .output()
         .unwrap();
     assert!(tar.status.success(), "tar failed: {tar:?}");
@@ -182,7 +192,9 @@ fn installer_installs_local_release_and_verifies_checksum() {
     assert!(out.status.success(), "installer failed: {out:?}");
 
     let installed = dest.join("argus");
+    let installed_code = dest.join("arguscode");
     assert!(installed.exists(), "missing installed argus");
+    assert!(installed_code.exists(), "missing installed arguscode");
     let version = Command::new(&installed).arg("--version").output().unwrap();
     assert!(
         version.status.success(),
@@ -190,6 +202,16 @@ fn installer_installs_local_release_and_verifies_checksum() {
     );
     let stdout = String::from_utf8_lossy(&version.stdout);
     assert!(stdout.contains("argus 0.1.1-test"), "stdout: {stdout}");
+    let code_version = Command::new(&installed_code)
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(
+        code_version.status.success(),
+        "installed arguscode failed: {code_version:?}"
+    );
+    let stdout = String::from_utf8_lossy(&code_version.stdout);
+    assert!(stdout.contains("arguscode 0.1.1-test"), "stdout: {stdout}");
 
     let _ = std::fs::remove_dir_all(&base);
 }

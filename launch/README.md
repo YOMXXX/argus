@@ -1,6 +1,6 @@
 # Argus Launch Command Center
 
-Argus should launch as the trust layer for AI coding agents, not as another AI coding agent.
+ArgusCode should launch as the open AI coding workbench and harness for developers who want one verified place to work with coding agents.
 
 Core line:
 
@@ -14,6 +14,8 @@ Primary audience:
 
 Primary proof:
 
+- `arguscode` opens the daily Workbench TUI.
+- `arguscode init` detects the project, imports rules, and creates memory/config/evals.
 - `argus demo` shows the verification gate catching a bad result and forcing a fix.
 - `argus trace show` exposes the black-box timeline.
 - `argus mcp-serve` gives existing agents a verification tool without switching workflows.

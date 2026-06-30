@@ -4,6 +4,10 @@ fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_argus")
 }
 
+fn arguscode_bin() -> &'static str {
+    env!("CARGO_BIN_EXE_arguscode")
+}
+
 #[test]
 fn run_then_show_roundtrip() {
     let dir = std::env::temp_dir().join(format!("argus-cli-it-{}", std::process::id()));
@@ -163,6 +167,57 @@ fn demo_workspace_writes_deterministic_trace() {
     assert!(show.status.success(), "trace show failed: {show:?}");
     let show_out = String::from_utf8_lossy(&show.stdout);
     assert!(show_out.contains("GATE"), "show: {show_out}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn arguscode_init_creates_workbench_project_files() {
+    let dir = std::env::temp_dir().join(format!("arguscode-init-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
+    std::fs::write(dir.join("AGENTS.md"), "Use tests as the source of truth.\n").unwrap();
+
+    let out = Command::new(arguscode_bin())
+        .arg("init")
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "arguscode init failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("ArgusCode initialized"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("cargo test --workspace --locked"),
+        "stdout: {stdout}"
+    );
+    assert!(dir.join(".argus/config.toml").exists());
+    assert!(dir.join(".argus/memory/project.md").exists());
+    assert!(dir.join(".argus/evals/smoke.json").exists());
+    let config = std::fs::read_to_string(dir.join(".argus/config.toml")).unwrap();
+    assert!(config.contains("default_provider = \"mock\""), "{config}");
+    assert!(config.contains("AGENTS.md"), "{config}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn arguscode_status_auto_initializes_and_reports_project() {
+    let dir = std::env::temp_dir().join(format!("arguscode-status-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("go.mod"), "module demo\n").unwrap();
+
+    let out = Command::new(arguscode_bin())
+        .arg("status")
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "arguscode status failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("ArgusCode status"), "stdout: {stdout}");
+    assert!(stdout.contains("go test ./..."), "stdout: {stdout}");
+    assert!(dir.join(".argus/config.toml").exists());
 
     let _ = std::fs::remove_dir_all(&dir);
 }

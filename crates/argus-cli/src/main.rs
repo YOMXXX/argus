@@ -1,6 +1,5 @@
-mod tui;
-
 use anyhow::Result;
+use argus_cli::tui;
 use argus_core::{
     mcp_connect, run_suite_with_options, run_with_escalation, Approver, CommandVerifier,
     EvalIsolation, EvalRunOptions, EvalSuite, SuiteReport, Verifier,

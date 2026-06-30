@@ -11,13 +11,13 @@ But the dangerous failure mode is not "it failed".
 
 It is "it failed, then confidently said done."
 
-I built Argus: an open-source black box and verification gate for AI coding agents.
+I built ArgusCode: an open AI coding workbench and verification harness for AI coding agents.
 ```
 
 Post 2:
 
 ```text
-Argus makes the agent prove the work:
+ArgusCode makes the agent prove the work:
 
 - run the task
 - record every model/tool step
@@ -34,6 +34,7 @@ The fastest way to understand it:
 curl -fsSL https://raw.githubusercontent.com/YOMXXX/argus/master/install.sh \
   | ARGUS_VERSION=v0.1.1 sh
 
+arguscode
 argus demo
 
 No API key needed.
@@ -68,9 +69,9 @@ Repo: https://github.com/YOMXXX/argus
 ## Single X Post
 
 ```text
-I built Argus: an open-source black box and verification gate for AI coding agents.
+I built ArgusCode: an open AI coding workbench and verification harness for AI coding agents.
 
-It records every model/tool/verify step, runs your tests before success, and plugs into Claude Code/Cursor/Codex over MCP.
+It opens as a TUI, records every model/tool/verify step, runs your tests before success, and plugs into Claude Code/Cursor/Codex over MCP.
 
 Try it without an API key:
 
@@ -142,7 +143,7 @@ Repo: https://github.com/YOMXXX/argus
 ```text
 Title: Argus: open-source black-box traces and verification gates for AI coding agents
 
-Argus is a CLI for making AI coding agents auditable.
+ArgusCode is a terminal workbench for making AI coding agents auditable.
 
 It records each run as JSONL, runs verification commands before reporting success, supports repo-local evals, and exposes a conservative MCP server so other coding agents can call its verification tool.
 

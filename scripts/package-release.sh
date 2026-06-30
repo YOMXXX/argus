@@ -20,18 +20,27 @@ checksum_file() {
 }
 
 target="$1"
-bin_name="argus"
+argus_bin_name="argus"
+arguscode_bin_name="arguscode"
 case "$target" in
-  *windows*|*-pc-*) bin_name="argus.exe" ;;
+  *windows*|*-pc-*)
+    argus_bin_name="argus.exe"
+    arguscode_bin_name="arguscode.exe"
+    ;;
 esac
 
-bin_path="${ARGUS_BIN_PATH:-target/$target/release/$bin_name}"
+argus_bin_path="${ARGUS_BIN_PATH:-target/$target/release/$argus_bin_name}"
+arguscode_bin_path="${ARGUSCODE_BIN_PATH:-target/$target/release/$arguscode_bin_name}"
 dist="${ARGUS_DIST_DIR:-dist}"
 archive_name="argus-$target.tar.gz"
 archive_path="$dist/$archive_name"
 
-if [ ! -f "$bin_path" ]; then
-  echo "release binary not found: $bin_path" >&2
+if [ ! -f "$argus_bin_path" ]; then
+  echo "release binary not found: $argus_bin_path" >&2
+  exit 1
+fi
+if [ ! -f "$arguscode_bin_path" ]; then
+  echo "release binary not found: $arguscode_bin_path" >&2
   exit 1
 fi
 
@@ -39,11 +48,12 @@ mkdir -p "$dist"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/package"
-cp "$bin_path" "$tmp/package/$bin_name"
+cp "$argus_bin_path" "$tmp/package/$argus_bin_name"
+cp "$arguscode_bin_path" "$tmp/package/$arguscode_bin_name"
 cp README.md LICENSE-MIT LICENSE-APACHE "$tmp/package/"
-chmod 755 "$tmp/package/$bin_name" 2>/dev/null || true
+chmod 755 "$tmp/package/$argus_bin_name" "$tmp/package/$arguscode_bin_name" 2>/dev/null || true
 
-tar -czf "$archive_path" -C "$tmp/package" "$bin_name" README.md LICENSE-MIT LICENSE-APACHE
+tar -czf "$archive_path" -C "$tmp/package" "$argus_bin_name" "$arguscode_bin_name" README.md LICENSE-MIT LICENSE-APACHE
 sum="$(checksum_file "$archive_path")"
 printf '%s  %s\n' "$sum" "$archive_name" > "$archive_path.sha256"
 

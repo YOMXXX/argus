@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Added `arguscode`, the daily Workbench entrypoint for developers; running `arguscode` opens the TUI.
+- Added `arguscode init`, `arguscode status`, and `arguscode doctor`.
+- Added `.argus/config.toml` generation with provider, verification, rules, memory, and UI profiles.
+- Added project detection for Rust, Node, Python, and Go repositories.
+- Added project memory and smoke eval generation under `.argus/`.
+- Added the first ArgusCode Workbench TUI shell with project, session, trace/memory, and terminal/verify panes.
+- Updated release packaging and installer support so archives install both `argus` and `arguscode`.
+
 ## 0.1.1 - 2026-06-30
 
 - Added step-aware trace forks with `argus trace fork --step`.

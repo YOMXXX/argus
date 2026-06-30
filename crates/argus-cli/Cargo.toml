@@ -15,12 +15,18 @@ description = "Argus CLI — the AI coding agent that never blinks."
 name = "argus"
 path = "src/main.rs"
 
+[[bin]]
+name = "arguscode"
+path = "src/bin/arguscode.rs"
+
 [dependencies]
 argus-core.workspace = true
 argus-trace.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
+serde.workspace = true
 serde_json = { workspace = true }
+toml = "0.8"
 ratatui.workspace = true
 async-trait.workspace = true

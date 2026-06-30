@@ -1,14 +1,14 @@
 <div align="center">
 
-# 👁️ Argus
+# 👁️ ArgusCode
 
 ### *Argus never blinks.*
 
-## The all-in-one AI coding agent that proves it works.
+## The open AI coding workbench that proves it works.
 
 **Don't trust your AI coding agent. Verify it.**
 
-One open-source, model-agnostic tool with the best of every coding agent — Claude Code · Cursor · Codex · Aider — **plus the one thing none of them have:** it *proves* its work with a verification gate and on-repo evals. No lock-in. No black box.
+One open-source, model-agnostic harness with the best of every coding agent — Claude Code · Cursor · Codex · KimiCode · MiMoCode · Aider — **plus the one thing none of them have:** it *proves* its work with a verification gate, trace, memory, and on-repo evals. No lock-in. No black box.
 
 `Rust` · `MIT OR Apache-2.0` · `MCP-native`
 
@@ -18,16 +18,16 @@ One open-source, model-agnostic tool with the best of every coding agent — Cla
 
 ---
 
-## Why Argus?
+## Why ArgusCode?
 
 Today's coding agents are smart — but you can't *trust* them. They drift on long tasks, claim "done" without checking, lock you to one vendor, and give you no way to prove they actually work on *your* codebase. You just... hope.
 
-Argus makes a different bet: **prove it, don't hope.** Named after the hundred-eyed guardian of Greek myth — the one who never closes all his eyes at once.
+ArgusCode makes a different bet: **prove it, don't hope.** Named after the hundred-eyed guardian of Greek myth — the one who never closes all his eyes at once.
 
-It comes in **two shapes**:
+It comes in **two layers**:
 
-1. **A standalone agent** — `argus run "..."` runs the full think→tool→verify loop, recording everything.
-2. **A trust layer for *other* agents** — `argus mcp-serve --workspace <repo>` exposes Argus's reliability tools over MCP, so Claude Code / Cursor / Codex can call them. Don't switch agents — give the one you have a verification gate and a black box.
+1. **ArgusCode Workbench** — `arguscode` opens the full-screen TUI for daily development.
+2. **Argus Harness** — `argus run`, `argus eval`, `argus trace`, and `argus mcp-serve` expose the scriptable core.
 
 ## The four things nobody else does
 
@@ -35,7 +35,7 @@ It comes in **two shapes**:
 |---|---|---|
 | 🎬 | **Time-travel debugging** | Rewind any run to any step. Fork it with a different model and diff the outcomes — side by side. |
 | 🛡️ | **Provable reliability** | A verification gate kills "fake done" — nothing ships until tests/build/lint pass. Plus an Eval engine that quantifies pass-rate & regressions *on your own repo*, with a CI-friendly exit code. |
-| 🔌 | **Zero-migration** | Your existing `AGENTS.md` / `CLAUDE.md` rules load automatically; connect any MCP server and its tools drop in. No rewrite. |
+| 🔌 | **Zero-migration** | `arguscode init` detects your project, imports `AGENTS.md` / `CLAUDE.md` / Cursor rules, creates memory, and keeps the old CLI harness available. |
 | 💸 | **Cost-smart routing** | Cheap model first; escalate to a strong model only when verification fails — and it reports exactly what you saved. |
 
 Everything sits on a **black-box Trace** (open JSONL): every thought, tool call, model I/O, token, route decision, and verification result — replayable, forkable, auditable.
@@ -53,7 +53,7 @@ Everything sits on a **black-box Trace** (open JSONL): every thought, tool call,
 
 ## Proven on real tasks
 
-Argus doesn't just claim reliability — it **measures** it. The [reliability benchmark](benchmarks/) runs real coding tasks (fix a bug, implement a function from tests, handle edge cases) and reports a pass-rate:
+ArgusCode doesn't just claim reliability — it **measures** it. The [reliability benchmark](benchmarks/) runs real coding tasks (fix a bug, implement a function from tests, handle edge cases) and reports a pass-rate:
 
 ```bash
 ./benchmarks/run-benchmark.sh --provider anthropic --model claude-sonnet-4-5 --yes
@@ -72,12 +72,12 @@ Then point it at *your own* repo with `argus eval` — reliability you can put a
 
 ## Built for trust
 
-- 🦀 **Rust core** — three small crates, one `argus` binary, no runtime.
+- 🦀 **Rust core** — three small crates, `arguscode` for humans and `argus` for automation.
 - 🔓 **Model-agnostic** — Anthropic, OpenAI, OpenRouter, local (Ollama/vLLM/LM Studio). Your keys, your choice.
 - 🧩 **MCP-native** — Argus is both an MCP *client* (consume external tools) and an MCP *server* (expose its own).
 - 📜 **Open everything** — open source, open trace format, no vendor lock.
 
-> **Status:** v1.0 feature-complete (all four killer features + multi-provider + TUI + MCP server work today, with 100+ tests and zero clippy warnings). Release automation, a checksum-verifying installer, and the hardened sandbox policy MVP are in-tree; the first public binary release now needs a maintainer tag/publish pass.
+> **Status:** v0.2 foundation in progress. `arguscode` now provides the daily Workbench entrypoint, project initialization, config, memory, smoke eval generation, and a multi-pane TUI shell. The existing `argus` harness remains the reliable scriptable core.
 
 ## Install
 
@@ -85,8 +85,8 @@ From source:
 
 ```bash
 git clone https://github.com/YOMXXX/argus && cd argus
-cargo install --path crates/argus-cli     # installs `argus` into ~/.cargo/bin
-argus --help
+cargo install --path crates/argus-cli     # installs `argus` and `arguscode` into ~/.cargo/bin
+arguscode --help
 ```
 
 From the GitHub Release:
@@ -96,7 +96,7 @@ curl -fsSL https://raw.githubusercontent.com/YOMXXX/argus/master/install.sh \
   | ARGUS_VERSION=v0.1.1 sh
 ```
 
-The installer supports macOS and Linux prebuilt archives, downloads the matching `.sha256`, verifies it, then installs `argus` to `${ARGUS_INSTALL_DIR:-$HOME/.local/bin}`.
+The installer supports macOS and Linux prebuilt archives, downloads the matching `.sha256`, verifies it, then installs `argus` and `arguscode` to `${ARGUS_INSTALL_DIR:-$HOME/.local/bin}`.
 
 Building from source requires a recent stable Rust toolchain (`rustup`/`cargo`/`rustc`).
 
@@ -111,9 +111,15 @@ Want to help people discover Argus?
 
 ## Quick start (no API key needed)
 
-Argus ships a built-in **mock provider**, so you can see the whole agent loop and the black box immediately — zero config:
+ArgusCode ships a built-in **mock provider**, so you can see the workbench and the harness immediately — zero config:
 
 ```bash
+# The daily entrypoint: initialize the current repo and open the TUI.
+arguscode
+
+# Generate config, project memory, and a smoke eval without opening the TUI.
+arguscode init
+
 # The money shot: gate catches fake done, the agent fixes, trace records it.
 argus demo
 

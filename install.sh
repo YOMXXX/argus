@@ -6,6 +6,7 @@ set -eu
 
 REPO="${ARGUS_REPO:-YOMXXX/argus}"
 BIN="argus"
+CODE_BIN="arguscode"
 VERSION="${ARGUS_VERSION:-latest}"
 
 checksum_file() {
@@ -90,10 +91,20 @@ verify_checksum "$tmp/$archive" "$tmp/$archive.sha256"
 tar -xzf "$tmp/$archive" -C "$tmp"
 cp "$tmp/$BIN" "$dest/$BIN"
 chmod +x "$dest/$BIN"
+if [ -f "$tmp/$CODE_BIN" ]; then
+  cp "$tmp/$CODE_BIN" "$dest/$CODE_BIN"
+  chmod +x "$dest/$CODE_BIN"
+fi
 
 echo "argus installed to $dest/$BIN"
+if [ -f "$dest/$CODE_BIN" ]; then
+  echo "arguscode installed to $dest/$CODE_BIN"
+fi
 case ":$PATH:" in
   *":$dest:"*) ;;
   *) echo "Add $dest to your PATH:  export PATH=\"$dest:\$PATH\"" ;;
 esac
 "$dest/$BIN" --version || true
+if [ -f "$dest/$CODE_BIN" ]; then
+  "$dest/$CODE_BIN" --version || true
+fi

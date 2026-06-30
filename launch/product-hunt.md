@@ -3,7 +3,7 @@
 ## Product Name
 
 ```text
-Argus
+ArgusCode
 ```
 
 ## Tagline
@@ -15,7 +15,7 @@ Make your AI coding agent prove it works.
 ## Short Description
 
 ```text
-Argus is an open-source black box and verification gate for AI coding agents. It records every step, runs your verification commands, and exposes reliability tools over MCP for Claude Code, Cursor, Codex, Aider, and custom agents.
+ArgusCode is an open AI coding workbench and harness for AI coding agents. It opens as a TUI, records every step, runs your verification commands, creates project memory/evals, and exposes reliability tools over MCP for Claude Code, Cursor, Codex, Aider, and custom agents.
 ```
 
 ## Categories
@@ -33,7 +33,7 @@ Secondary:
 
 ## Gallery Shot List
 
-1. Hero: `Argus never blinks. Make your AI coding agent prove it works.`
+1. Hero: `ArgusCode never blinks. Make your AI coding agent prove it works.`
 2. Demo: verification gate catches a bad result, then passes after the fix.
 3. Trace: JSONL black-box timeline with task, model, tool, and verify events.
 4. MCP: Claude Code / Cursor / Codex connect to Argus as a verification tool.
