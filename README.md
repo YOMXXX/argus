@@ -126,6 +126,7 @@ arguscode
 # Switch models in-session with /provider deepseek deepseek-chat or /model <name>.
 # Manage the queue in-session with /tasks, /cancel <task-id>, and /retry <task-id>.
 # Tune execution safety with /sandbox read-only|workspace-write|trusted and /approval auto|ask.
+# Capture durable lessons with /remember <lesson> and refresh memory with /memory.
 # Refresh codebase shape with /map for top directories, extensions, rules, and verify commands.
 # Inspect eval suites with /evals, then run smoke or a suite path with /eval-run.
 

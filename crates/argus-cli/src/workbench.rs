@@ -3,6 +3,7 @@ use crate::diff::load_diff_preview;
 use crate::eval_dashboard::load_eval_dashboard;
 use crate::eval_runner::{run_eval_suite, EvalRunOutput};
 use crate::harness::{run_task_through_harness, HarnessRunOutput};
+use crate::memory::{append_lesson, load_memory_preview};
 use crate::project::{detect_project, init_project, ProjectProfile};
 use crate::repo_map::load_repo_map;
 use crate::route_runner::{run_task_through_route, RouteRunOutput};
@@ -107,6 +108,7 @@ pub struct WorkbenchApp {
     pub trace_preview: TracePreview,
     pub repo_map: String,
     pub eval_dashboard: String,
+    pub memory_preview: String,
     pub terminal_log: Vec<String>,
     pub latest_trace_path: Option<PathBuf>,
     pub input: String,
@@ -120,6 +122,7 @@ struct WorkbenchLoadedData {
     trace_preview: TracePreview,
     repo_map: String,
     eval_dashboard: String,
+    memory_preview: String,
 }
 
 impl WorkbenchApp {
@@ -134,6 +137,7 @@ impl WorkbenchApp {
                 trace_preview: TracePreview::empty(),
                 repo_map: "(not loaded)".into(),
                 eval_dashboard: "(not loaded)".into(),
+                memory_preview: "(not loaded)".into(),
             },
         )
     }
@@ -146,6 +150,7 @@ impl WorkbenchApp {
         let trace_preview = load_trace_preview(&profile.root, latest_trace_path.as_deref());
         let repo_map = load_repo_map(&profile.root, &profile, &config)?;
         let eval_dashboard = load_eval_dashboard(&profile.root)?;
+        let memory_preview = load_memory_preview(&profile.root, &config.memory)?;
         Ok(Self::with_state(
             profile,
             config,
@@ -156,6 +161,7 @@ impl WorkbenchApp {
                 trace_preview,
                 repo_map,
                 eval_dashboard,
+                memory_preview,
             },
         ))
     }
@@ -181,6 +187,7 @@ impl WorkbenchApp {
             trace_preview: data.trace_preview,
             repo_map: data.repo_map,
             eval_dashboard: data.eval_dashboard,
+            memory_preview: data.memory_preview,
             terminal_log: Vec::new(),
             latest_trace_path,
             input: String::new(),
@@ -266,8 +273,7 @@ impl WorkbenchApp {
                 }
             }
             PaletteAction::Memory => {
-                self.active_pane = WorkbenchPane::Trace;
-                self.status = format!("Memory opened: {}", self.config.memory.project);
+                self.refresh_memory_preview("Memory opened.");
             }
             PaletteAction::History => {
                 self.active_pane = WorkbenchPane::Trace;
@@ -367,9 +373,9 @@ impl WorkbenchApp {
                 );
             }
             "/memory" => {
-                self.active_pane = WorkbenchPane::Trace;
-                self.status = format!("Memory opened: {}", self.config.memory.project);
+                self.refresh_memory_preview("Memory opened.");
             }
+            "/remember" => self.remember_lesson(&args.join(" ")),
             "/sandbox" => self.update_sandbox_profile(args.first().copied()),
             "/approval" => self.update_approval_profile(args.first().copied()),
             "/model" | "/provider" => {
@@ -430,6 +436,34 @@ impl WorkbenchApp {
             cheap.clone()
         };
         (cheap, strong)
+    }
+
+    fn refresh_memory_preview(&mut self, label: &str) {
+        self.active_pane = WorkbenchPane::Trace;
+        match load_memory_preview(&self.profile.root, &self.config.memory) {
+            Ok(preview) => {
+                self.memory_preview = preview;
+                self.status = format!(
+                    "{label} project={}, lessons={}",
+                    self.config.memory.project, self.config.memory.lessons
+                );
+            }
+            Err(err) => {
+                self.status = format!("Could not load memory: {err}");
+            }
+        }
+    }
+
+    fn remember_lesson(&mut self, lesson: &str) {
+        self.active_pane = WorkbenchPane::Trace;
+        match append_lesson(&self.profile.root, &self.config.memory, lesson) {
+            Ok(_) => {
+                self.refresh_memory_preview("Lesson remembered.");
+            }
+            Err(err) => {
+                self.status = format!("Could not remember lesson: {err}");
+            }
+        }
     }
 
     fn update_sandbox_profile(&mut self, sandbox: Option<&str>) {
@@ -1133,7 +1167,9 @@ fn render_trace(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
     }
     lines.push(Line::from(""));
     lines.push(Line::from("Memory"));
-    lines.push(Line::from(app.config.memory.project.clone()));
+    for line in app.memory_preview.lines().take(12) {
+        lines.push(Line::from(line.to_string()));
+    }
     lines.push(Line::from(""));
     for line in app.eval_dashboard.lines().take(10) {
         lines.push(Line::from(line.to_string()));
@@ -1245,6 +1281,8 @@ Slash commands\n\
 /retry   Requeue a task by id\n\
 /diff    Refresh diff preview\n\
 /history Open session history\n\
+/memory  Refresh project memory preview\n\
+/remember Append a durable lesson\n\
 /model   Set or show current model\n\
 /provider Set or show provider profile\n\
 /sandbox Set or show sandbox profile\n\
@@ -2020,6 +2058,42 @@ mod tests {
         assert!(
             terminal.contains("trace: .argus/tasks/route.trace.jsonl"),
             "trace missing: {terminal}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_remember_appends_lesson_and_refreshes_memory_preview() {
+        let dir = temp_dir("slash-remember");
+        std::fs::create_dir_all(dir.join(".argus/memory")).unwrap();
+        std::fs::write(
+            dir.join(".argus/memory/project.md"),
+            "# Project\n\nRust CLI.\n",
+        )
+        .unwrap();
+        let seed = app_with_root(dir.clone());
+        let mut app = WorkbenchApp::load(seed.profile, seed.config).unwrap();
+
+        for c in "/remember Always run clippy before release".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert!(app.task_queue.is_empty(), "{:?}", app.task_queue);
+        assert!(list_tasks(&dir).unwrap().is_empty());
+        assert_eq!(app.active_pane, WorkbenchPane::Trace);
+        assert!(app.status.contains("Lesson remembered"), "{}", app.status);
+        assert!(
+            app.memory_preview
+                .contains("Always run clippy before release"),
+            "{}",
+            app.memory_preview
+        );
+        let lessons = std::fs::read_to_string(dir.join(".argus/memory/lessons.md")).unwrap();
+        assert!(
+            lessons.contains("- Always run clippy before release"),
+            "{lessons}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);
