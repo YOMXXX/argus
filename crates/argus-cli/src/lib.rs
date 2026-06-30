@@ -1,3 +1,4 @@
+pub mod checkpoints;
 pub mod config;
 pub mod diff;
 pub mod eval_dashboard;

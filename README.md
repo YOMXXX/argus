@@ -128,6 +128,7 @@ arguscode
 # Tune execution safety with /sandbox read-only|workspace-write|trusted and /approval auto|ask.
 # Capture durable lessons with /remember <lesson> and refresh memory with /memory.
 # Attach MCP tools with /mcp <server command> and /mcp-allow <tool-name>.
+# Save and restore risky edits with /checkpoint [label] and /rollback [checkpoint-id].
 # Refresh codebase shape with /map for top directories, extensions, rules, and verify commands.
 # Inspect eval suites with /evals, then run smoke or a suite path with /eval-run.
 

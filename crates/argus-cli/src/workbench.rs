@@ -1,3 +1,4 @@
+use crate::checkpoints::{create_checkpoint, latest_checkpoint, restore_checkpoint};
 use crate::config::{ArgusCodeConfig, CONFIG_PATH, SMOKE_EVAL_PATH};
 use crate::diff::load_diff_preview;
 use crate::eval_dashboard::load_eval_dashboard;
@@ -378,6 +379,8 @@ impl WorkbenchApp {
             "/remember" => self.remember_lesson(&args.join(" ")),
             "/mcp" => self.update_mcp_profile(&args),
             "/mcp-allow" => self.add_mcp_allow(args.first().copied()),
+            "/checkpoint" => self.save_checkpoint(&args.join(" ")),
+            "/rollback" => self.rollback_checkpoint(args.first().copied()),
             "/sandbox" => self.update_sandbox_profile(args.first().copied()),
             "/approval" => self.update_approval_profile(args.first().copied()),
             "/model" | "/provider" => {
@@ -520,6 +523,58 @@ impl WorkbenchApp {
             "{status}: {}",
             self.config.mcp.command.as_deref().unwrap_or("(off)")
         );
+    }
+
+    fn save_checkpoint(&mut self, label: &str) {
+        self.active_pane = WorkbenchPane::Terminal;
+        match create_checkpoint(&self.profile.root, label) {
+            Ok(record) => {
+                self.terminal_log = vec![
+                    format!("checkpoint: {}", record.id),
+                    format!("label: {}", record.label),
+                    format!("files: {}", record.file_count),
+                ];
+                self.status = format!("Checkpoint saved: {}", record.id);
+            }
+            Err(err) => {
+                self.status = format!("Could not save checkpoint: {err}");
+                self.terminal_log.push(format!("error: {err}"));
+            }
+        }
+    }
+
+    fn rollback_checkpoint(&mut self, checkpoint_id: Option<&str>) {
+        self.active_pane = WorkbenchPane::Terminal;
+        let checkpoint = match checkpoint_id {
+            Some(id) => restore_checkpoint(&self.profile.root, id),
+            None => match latest_checkpoint(&self.profile.root) {
+                Ok(Some(record)) => restore_checkpoint(&self.profile.root, &record.id),
+                Ok(None) => {
+                    self.status = "No checkpoint found.".into();
+                    self.terminal_log = vec!["No checkpoint found.".into()];
+                    return;
+                }
+                Err(err) => Err(err),
+            },
+        };
+        match checkpoint {
+            Ok(record) => {
+                self.diff_preview = load_diff_preview(&self.profile.root)
+                    .unwrap_or_else(|err| format!("Could not refresh diff: {err}"));
+                self.repo_map = load_repo_map(&self.profile.root, &self.profile, &self.config)
+                    .unwrap_or_else(|err| format!("Could not refresh repo map: {err}"));
+                self.terminal_log = vec![
+                    format!("rolled back: {}", record.id),
+                    format!("label: {}", record.label),
+                    format!("files: {}", record.file_count),
+                ];
+                self.status = format!("Rolled back to checkpoint {}", record.id);
+            }
+            Err(err) => {
+                self.status = format!("Rollback failed: {err}");
+                self.terminal_log.push(format!("error: {err}"));
+            }
+        }
     }
 
     fn update_sandbox_profile(&mut self, sandbox: Option<&str>) {
@@ -770,10 +825,17 @@ impl WorkbenchApp {
             self.terminal_log.push("No resumable task found.".into());
             return Ok(());
         };
+        let checkpoint = create_checkpoint(
+            &self.profile.root,
+            &format!("before task {} direct run", task.id),
+        )?;
 
         self.active_pane = WorkbenchPane::Terminal;
         self.status = format!("Running task {} through Argus harness...", task.id);
-        self.terminal_log = vec![format!("$ arguscode resume --run  # {}", task.text)];
+        self.terminal_log = vec![
+            format!("checkpoint: {}", checkpoint.id),
+            format!("$ arguscode resume --run  # {}", task.text),
+        ];
 
         match runner(&self.profile.root, &task) {
             Ok(output) => {
@@ -823,12 +885,19 @@ impl WorkbenchApp {
     {
         self.active_pane = WorkbenchPane::Terminal;
         self.status = format!("Running eval suite {}...", suite.display());
-        self.terminal_log = vec![format!(
-            "$ argus eval {} --provider {} --model {} --in-place",
-            suite.display(),
-            self.config.provider.default_provider,
-            self.config.provider.default_model
-        )];
+        let checkpoint = create_checkpoint(
+            &self.profile.root,
+            &format!("before eval {}", suite.display()),
+        )?;
+        self.terminal_log = vec![
+            format!("checkpoint: {}", checkpoint.id),
+            format!(
+                "$ argus eval {} --provider {} --model {} --in-place",
+                suite.display(),
+                self.config.provider.default_provider,
+                self.config.provider.default_model
+            ),
+        ];
 
         let output = runner(&self.profile.root, &self.config, &suite)?;
         if !output.stdout.trim().is_empty() {
@@ -866,16 +935,23 @@ impl WorkbenchApp {
             self.terminal_log.push("No resumable task found.".into());
             return Ok(());
         };
+        let checkpoint = create_checkpoint(
+            &self.profile.root,
+            &format!("before task {} route run", task.id),
+        )?;
 
         self.active_pane = WorkbenchPane::Terminal;
         self.status = format!(
             "Routing task {} through {} -> {}...",
             task.id, cheap_model, strong_model
         );
-        self.terminal_log = vec![format!(
-            "$ argus route {} --cheap {} --strong {}",
-            task.text, cheap_model, strong_model
-        )];
+        self.terminal_log = vec![
+            format!("checkpoint: {}", checkpoint.id),
+            format!(
+                "$ argus route {} --cheap {} --strong {}",
+                task.text, cheap_model, strong_model
+            ),
+        ];
 
         match runner(&self.profile.root, &task, cheap_model, strong_model) {
             Ok(output) => {
@@ -1341,6 +1417,8 @@ Slash commands\n\
 /remember Append a durable lesson\n\
 /mcp     Set/show MCP server command\n\
 /mcp-allow Allow an MCP tool by name\n\
+/checkpoint Save a rollback snapshot\n\
+/rollback Restore latest or named checkpoint\n\
 /model   Set or show current model\n\
 /provider Set or show provider profile\n\
 /sandbox Set or show sandbox profile\n\
@@ -2184,6 +2262,85 @@ mod tests {
         let terminal = app.terminal_log.join("\n");
         assert!(terminal.contains("mcp: argus __mcp-mock"), "{terminal}");
         assert!(terminal.contains("allow: echo"), "{terminal}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_checkpoint_and_rollback_restore_workspace_files() {
+        let dir = temp_dir("slash-checkpoint");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "before\n").unwrap();
+        let mut app = app_with_root(dir.clone());
+
+        for c in "/checkpoint before risky edit".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+        assert!(app.status.contains("Checkpoint saved"), "{}", app.status);
+        let checkpoint = crate::checkpoints::latest_checkpoint(&dir)
+            .unwrap()
+            .unwrap();
+        assert_eq!(checkpoint.label, "before risky edit");
+
+        std::fs::write(dir.join("src/lib.rs"), "after\n").unwrap();
+        std::fs::write(dir.join("src/new.rs"), "new\n").unwrap();
+        for c in "/rollback".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert_eq!(
+            std::fs::read_to_string(dir.join("src/lib.rs")).unwrap(),
+            "before\n"
+        );
+        assert!(!dir.join("src/new.rs").exists());
+        assert_eq!(app.active_pane, WorkbenchPane::Terminal);
+        assert!(app.status.contains("Rolled back"), "{}", app.status);
+        assert!(
+            app.terminal_log.join("\n").contains(&checkpoint.id),
+            "{:?}",
+            app.terminal_log
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn run_latest_task_creates_checkpoint_before_runner() {
+        let dir = temp_dir("auto-checkpoint-run");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("main.rs"), "before\n").unwrap();
+        queue_task(&dir, "rewrite main").unwrap();
+        let seed = app_with_root(dir.clone());
+        let mut app = WorkbenchApp::load(seed.profile, seed.config).unwrap();
+
+        app.run_latest_task_with(&mut |root, task| {
+            let checkpoint = crate::checkpoints::latest_checkpoint(root)
+                .unwrap()
+                .unwrap();
+            assert!(checkpoint.label.contains(&task.id), "{}", checkpoint.label);
+            std::fs::write(root.join("main.rs"), "after\n").unwrap();
+            crate::tasks::update_task_status(root, &task.id, "done").unwrap();
+            Ok(HarnessRunOutput {
+                task_id: task.id.clone(),
+                task_text: task.text.clone(),
+                status: "done".into(),
+                trace: PathBuf::from(".argus/tasks/fake.trace.jsonl"),
+                stdout: "changed file".into(),
+                stderr: String::new(),
+            })
+        })
+        .unwrap();
+
+        let checkpoint = crate::checkpoints::latest_checkpoint(&dir)
+            .unwrap()
+            .unwrap();
+        crate::checkpoints::restore_checkpoint(&dir, &checkpoint.id).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("main.rs")).unwrap(),
+            "before\n"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
