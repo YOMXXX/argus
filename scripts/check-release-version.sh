@@ -1,5 +1,5 @@
 #!/bin/sh
-# Verify that a release tag such as v0.1.0 matches workspace.package.version.
+# Verify that a release tag such as v0.1.1 matches workspace.package.version.
 set -eu
 
 if [ "$#" -ne 1 ]; then

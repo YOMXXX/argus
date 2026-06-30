@@ -93,7 +93,7 @@ From a GitHub Release, once a tagged release exists:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/YOMXXX/argus/master/install.sh \
-  | ARGUS_VERSION=v0.1.0 sh
+  | ARGUS_VERSION=v0.1.1 sh
 ```
 
 The installer supports macOS and Linux prebuilt archives, downloads the matching `.sha256`, verifies it, then installs `argus` to `${ARGUS_INSTALL_DIR:-$HOME/.local/bin}`.

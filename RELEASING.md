@@ -24,14 +24,14 @@ cargo package -p argus-trace --locked --allow-dirty
 6. Check the tag matches the workspace version:
 
 ```bash
-scripts/check-release-version.sh v0.1.0
+scripts/check-release-version.sh v0.1.1
 ```
 
 ## Tag And GitHub Release
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 The `Release` workflow validates the tag, runs locked tests, packages each target with `scripts/package-release.sh`, uploads artifacts from the build matrix, then publishes the GitHub Release only after all target builds complete. Each archive has a sibling `.sha256` file.
@@ -43,7 +43,7 @@ After the GitHub Release is published:
 ```bash
 tmp="$(mktemp -d)"
 curl -fsSL https://raw.githubusercontent.com/YOMXXX/argus/master/install.sh \
-  | ARGUS_VERSION=v0.1.0 ARGUS_INSTALL_DIR="$tmp/bin" sh
+  | ARGUS_VERSION=v0.1.1 ARGUS_INSTALL_DIR="$tmp/bin" sh
 "$tmp/bin/argus" --version
 ```
 

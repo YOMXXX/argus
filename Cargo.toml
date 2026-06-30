@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/YOMXXX/argus"
@@ -26,6 +26,6 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "ti
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 wiremock = "0.6"
 libc = "0.2"
-argus-trace = { path = "crates/argus-trace", version = "0.1.0" }
-argus-core = { path = "crates/argus-core", version = "0.1.0" }
+argus-trace = { path = "crates/argus-trace", version = "0.1.1" }
+argus-core = { path = "crates/argus-core", version = "0.1.1" }
 ratatui = "0.29"

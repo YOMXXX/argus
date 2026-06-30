@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 - 2026-06-30
+## 0.1.1 - 2026-06-30
 
 - Added step-aware trace forks with `argus trace fork --step`.
 - Added reproducible eval resets, repeated sampling, `--no-gate`, and JSON eval reports.

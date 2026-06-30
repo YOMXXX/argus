@@ -75,7 +75,7 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "argus-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "argus-core",
@@ -89,7 +89,7 @@ dependencies = [
 
 [[package]]
 name = "argus-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "argus-trace",
@@ -104,7 +104,7 @@ dependencies = [
 
 [[package]]
 name = "argus-trace"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "serde",

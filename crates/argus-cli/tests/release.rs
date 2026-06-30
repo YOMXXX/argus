@@ -31,7 +31,7 @@ fn host_target() -> Option<&'static str> {
 fn write_fake_argus(dir: &Path) -> PathBuf {
     std::fs::create_dir_all(dir).unwrap();
     let bin = dir.join("argus");
-    std::fs::write(&bin, "#!/bin/sh\necho argus 0.1.0-test\n").unwrap();
+    std::fs::write(&bin, "#!/bin/sh\necho argus 0.1.1-test\n").unwrap();
     let mut perms = std::fs::metadata(&bin).unwrap().permissions();
     use std::os::unix::fs::PermissionsExt;
     perms.set_mode(0o755);
@@ -63,7 +63,7 @@ fn release_version_script_accepts_matching_tag_and_rejects_mismatch() {
     let root = repo_root();
     let ok = Command::new("sh")
         .arg(root.join("scripts/check-release-version.sh"))
-        .arg("v0.1.0")
+        .arg("v0.1.1")
         .current_dir(&root)
         .output()
         .unwrap();
@@ -189,7 +189,7 @@ fn installer_installs_local_release_and_verifies_checksum() {
         "installed binary failed: {version:?}"
     );
     let stdout = String::from_utf8_lossy(&version.stdout);
-    assert!(stdout.contains("argus 0.1.0-test"), "stdout: {stdout}");
+    assert!(stdout.contains("argus 0.1.1-test"), "stdout: {stdout}");
 
     let _ = std::fs::remove_dir_all(&base);
 }
@@ -234,11 +234,11 @@ fn workspace_path_dependencies_are_versioned_for_crates_io() {
     let cargo = std::fs::read_to_string(repo_root().join("Cargo.toml")).unwrap();
 
     assert!(
-        cargo.contains(r#"argus-trace = { path = "crates/argus-trace", version = "0.1.0" }"#),
+        cargo.contains(r#"argus-trace = { path = "crates/argus-trace", version = "0.1.1" }"#),
         "argus-trace workspace dependency needs a version for publishing"
     );
     assert!(
-        cargo.contains(r#"argus-core = { path = "crates/argus-core", version = "0.1.0" }"#),
+        cargo.contains(r#"argus-core = { path = "crates/argus-core", version = "0.1.1" }"#),
         "argus-core workspace dependency needs a version for publishing"
     );
 }
