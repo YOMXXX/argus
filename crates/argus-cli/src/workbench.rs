@@ -1,6 +1,7 @@
-use crate::config::{ArgusCodeConfig, CONFIG_PATH};
+use crate::config::{ArgusCodeConfig, CONFIG_PATH, SMOKE_EVAL_PATH};
 use crate::diff::load_diff_preview;
 use crate::eval_dashboard::load_eval_dashboard;
+use crate::eval_runner::{run_eval_suite, EvalRunOutput};
 use crate::harness::{run_task_through_harness, HarnessRunOutput};
 use crate::project::{detect_project, init_project, ProjectProfile};
 use crate::repo_map::load_repo_map;
@@ -289,6 +290,20 @@ impl WorkbenchApp {
     }
 
     fn execute_slash_command(&mut self, raw: &str) {
+        let mut task_runner = run_task_through_harness;
+        let mut eval_runner = run_eval_suite;
+        self.execute_slash_command_with(raw, &mut task_runner, &mut eval_runner);
+    }
+
+    fn execute_slash_command_with<TaskRunner, EvalRunner>(
+        &mut self,
+        raw: &str,
+        task_runner: &mut TaskRunner,
+        eval_runner: &mut EvalRunner,
+    ) where
+        TaskRunner: FnMut(&Path, &TaskRecord) -> Result<HarnessRunOutput>,
+        EvalRunner: FnMut(&Path, &ArgusCodeConfig, &Path) -> Result<EvalRunOutput>,
+    {
         let mut parts = raw.split_whitespace();
         let command = parts.next().unwrap_or_default();
         let args = parts.collect::<Vec<_>>();
@@ -299,7 +314,7 @@ impl WorkbenchApp {
                 }
             }
             "/run" | "/resume" => {
-                if let Err(err) = self.run_latest_task_with(&mut run_task_through_harness) {
+                if let Err(err) = self.run_latest_task_with(task_runner) {
                     self.active_pane = WorkbenchPane::Terminal;
                     self.status = format!("Harness run failed: {err}");
                     self.terminal_log.push(format!("error: {err}"));
@@ -308,6 +323,17 @@ impl WorkbenchApp {
             "/diff" => self.refresh_diff_preview(),
             "/map" => self.refresh_repo_map(),
             "/eval" | "/evals" => self.refresh_eval_dashboard(),
+            "/eval-run" => {
+                let suite = args
+                    .first()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| PathBuf::from(SMOKE_EVAL_PATH));
+                if let Err(err) = self.run_eval_suite_with(suite, eval_runner) {
+                    self.active_pane = WorkbenchPane::Terminal;
+                    self.status = format!("Eval run failed: {err}");
+                    self.terminal_log.push(format!("error: {err}"));
+                }
+            }
             "/tasks" => self.show_task_queue(),
             "/cancel" => self.update_task_status_from_command(
                 args.first().copied(),
@@ -355,7 +381,7 @@ impl WorkbenchApp {
             }
             _ => {
                 self.status = format!(
-                    "Unknown slash command: {command}. Try /help, /verify, /run, /diff, /history."
+                    "Unknown slash command: {command}. Try /help, /verify, /run, /eval-run, /diff."
                 );
             }
         }
@@ -654,6 +680,40 @@ impl WorkbenchApp {
                 Err(err)
             }
         }
+    }
+
+    pub fn run_eval_suite_with<F>(&mut self, suite: PathBuf, runner: &mut F) -> Result<()>
+    where
+        F: FnMut(&Path, &ArgusCodeConfig, &Path) -> Result<EvalRunOutput>,
+    {
+        self.active_pane = WorkbenchPane::Terminal;
+        self.status = format!("Running eval suite {}...", suite.display());
+        self.terminal_log = vec![format!(
+            "$ argus eval {} --provider {} --model {} --in-place",
+            suite.display(),
+            self.config.provider.default_provider,
+            self.config.provider.default_model
+        )];
+
+        let output = runner(&self.profile.root, &self.config, &suite)?;
+        if !output.stdout.trim().is_empty() {
+            self.terminal_log.push(output.stdout);
+        }
+        if !output.stderr.trim().is_empty() {
+            self.terminal_log.push(output.stderr);
+        }
+        self.terminal_log.push(format!("status: {}", output.status));
+        self.terminal_log
+            .push(format!("out-dir: {}", output.out_dir.display()));
+        self.terminal_log
+            .push(format!("report: {}", output.report_json.display()));
+        self.eval_dashboard = load_eval_dashboard(&self.profile.root)?;
+        self.status = if output.status == "passed" {
+            format!("Eval passed: {}", output.suite.display())
+        } else {
+            format!("Eval failed: {}", output.suite.display())
+        };
+        Ok(())
     }
 
     pub fn run_verify_gate(&mut self) -> Result<()> {
@@ -1059,6 +1119,7 @@ Slash commands\n\
 /run     Run latest queued task\n\
 /map     Refresh repo map\n\
 /evals   Refresh eval dashboard\n\
+/eval-run Run smoke eval or a suite path\n\
 /tasks   Show task queue\n\
 /cancel  Cancel a task by id\n\
 /retry   Requeue a task by id\n\
@@ -1115,6 +1176,7 @@ fn panel_block(title: &'static str, active: bool) -> Block<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::eval_runner::EvalRunOutput;
     use crate::harness::HarnessRunOutput;
     use crate::project::build_config;
     use crate::sessions::append_session;
@@ -1692,6 +1754,67 @@ mod tests {
         );
         assert!(
             app.eval_dashboard.contains("regression"),
+            "{}",
+            app.eval_dashboard
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_eval_run_defaults_to_smoke_suite_without_queueing_task() {
+        let dir = temp_dir("slash-eval-run");
+        std::fs::create_dir_all(dir.join(".argus/evals")).unwrap();
+        std::fs::write(
+            dir.join(".argus/evals/smoke.json"),
+            r#"{"name":"demo smoke","cases":[{"id":"smoke","task":"check","verify":["true"]}]}"#,
+        )
+        .unwrap();
+        let seed = app_with_root(dir.clone());
+        let mut app = WorkbenchApp::load(seed.profile, seed.config).unwrap();
+        app.eval_dashboard = "stale".into();
+
+        let mut task_runner = |_root: &Path, _task: &TaskRecord| -> Result<HarnessRunOutput> {
+            panic!("eval-run must not invoke the task harness")
+        };
+        let mut seen_suite = None;
+        let mut eval_runner =
+            |root: &Path, config: &ArgusCodeConfig, suite: &Path| -> Result<EvalRunOutput> {
+                assert_eq!(root, dir.as_path());
+                assert_eq!(config.provider.default_provider, "mock");
+                seen_suite = Some(suite.to_path_buf());
+                Ok(EvalRunOutput {
+                    suite: suite.to_path_buf(),
+                    out_dir: PathBuf::from(".argus/eval-runs"),
+                    report_json: PathBuf::from(".argus/eval-runs/smoke.report.json"),
+                    status: "passed".into(),
+                    stdout: "eval: demo smoke\n1/1 passed (100%)\n".into(),
+                    stderr: String::new(),
+                })
+            };
+
+        app.execute_slash_command_with("/eval-run", &mut task_runner, &mut eval_runner);
+
+        assert_eq!(
+            seen_suite.unwrap(),
+            PathBuf::from(".argus/evals/smoke.json")
+        );
+        assert!(app.task_queue.is_empty(), "{:?}", app.task_queue);
+        assert!(list_tasks(&dir).unwrap().is_empty());
+        assert_eq!(app.active_pane, WorkbenchPane::Terminal);
+        assert!(app.status.contains("Eval passed"), "{}", app.status);
+        let terminal = app.terminal_log.join("\n");
+        assert!(
+            terminal.contains("$ argus eval .argus/evals/smoke.json"),
+            "{terminal}"
+        );
+        assert!(terminal.contains("eval: demo smoke"), "{terminal}");
+        assert!(
+            terminal.contains("report: .argus/eval-runs/smoke.report.json"),
+            "{terminal}"
+        );
+        assert!(
+            app.eval_dashboard.contains("demo smoke"),
             "{}",
             app.eval_dashboard
         );

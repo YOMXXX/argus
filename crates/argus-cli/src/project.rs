@@ -288,9 +288,8 @@ fn smoke_eval_json(profile: &ProjectProfile) -> Result<String> {
         "cases": [{
             "id": "project-smoke",
             "task": "Inspect the project and keep behavior unchanged. Do not edit files unless a verification command requires it.",
-            "dir": ".",
-            "verify": verify,
-            "reset": "none"
+            "dir": "../..",
+            "verify": verify
         }]
     });
     Ok(serde_json::to_string_pretty(&value)?)
@@ -369,6 +368,24 @@ mod tests {
         assert!(report.eval_path.exists());
         let config = ArgusCodeConfig::read(&report.profile.root).unwrap();
         assert_eq!(config.verify.commands, vec!["go test ./..."]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn init_writes_smoke_eval_that_core_can_parse() {
+        let dir = temp_dir("init-parseable-smoke-eval");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
+
+        let report = init_project(&dir, false).unwrap();
+        let text = std::fs::read_to_string(&report.eval_path).unwrap();
+        let suite: argus_core::EvalSuite = serde_json::from_str(&text).unwrap();
+
+        assert!(suite.name.ends_with(" smoke"), "{}", suite.name);
+        assert_eq!(suite.cases.len(), 1);
+        assert_eq!(suite.cases[0].id, "project-smoke");
+        assert_eq!(suite.cases[0].dir.as_deref(), Some("../.."));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -1,6 +1,7 @@
 pub mod config;
 pub mod diff;
 pub mod eval_dashboard;
+pub mod eval_runner;
 pub mod harness;
 pub mod project;
 pub mod repo_map;

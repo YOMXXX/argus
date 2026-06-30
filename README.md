@@ -126,7 +126,7 @@ arguscode
 # Manage the queue in-session with /tasks, /cancel <task-id>, and /retry <task-id>.
 # Tune execution safety with /sandbox read-only|workspace-write|trusted and /approval auto|ask.
 # Refresh codebase shape with /map for top directories, extensions, rules, and verify commands.
-# Inspect eval suites with /evals before running regression gates.
+# Inspect eval suites with /evals, then run smoke or a suite path with /eval-run.
 
 # Generate config, project memory, and a smoke eval without opening the TUI.
 arguscode init
@@ -246,6 +246,10 @@ Define a suite (each case = a task + the `verify` commands that decide pass/fail
 ```bash
 argus eval suite.json --provider anthropic --model claude-sonnet-4-5
 # 1/1 passed (100%)  — each case writes its own trace under .argus/eval/
+
+# In the ArgusCode TUI, /eval-run defaults to .argus/evals/smoke.json,
+# verifies the current workspace, and writes reports/traces under .argus/eval-runs.
+arguscode
 
 # Measure stability with repeated samples and a machine-readable report.
 argus eval suite.json --samples 5 --report-json .argus/eval/report.json
