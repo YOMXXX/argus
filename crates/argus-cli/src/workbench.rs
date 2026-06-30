@@ -5,6 +5,7 @@ use crate::eval_runner::{run_eval_suite, EvalRunOutput};
 use crate::harness::{run_task_through_harness, HarnessRunOutput};
 use crate::project::{detect_project, init_project, ProjectProfile};
 use crate::repo_map::load_repo_map;
+use crate::route_runner::{run_task_through_route, RouteRunOutput};
 use crate::sessions::{list_sessions, SessionRecord};
 use crate::tasks::{latest_resumable_task, list_tasks, queue_task, update_task_status, TaskRecord};
 use crate::trace_view::{load_trace_preview, TracePreview};
@@ -292,17 +293,20 @@ impl WorkbenchApp {
     fn execute_slash_command(&mut self, raw: &str) {
         let mut task_runner = run_task_through_harness;
         let mut eval_runner = run_eval_suite;
-        self.execute_slash_command_with(raw, &mut task_runner, &mut eval_runner);
+        let mut route_runner = run_task_through_route;
+        self.execute_slash_command_with(raw, &mut task_runner, &mut eval_runner, &mut route_runner);
     }
 
-    fn execute_slash_command_with<TaskRunner, EvalRunner>(
+    fn execute_slash_command_with<TaskRunner, EvalRunner, RouteRunner>(
         &mut self,
         raw: &str,
         task_runner: &mut TaskRunner,
         eval_runner: &mut EvalRunner,
+        route_runner: &mut RouteRunner,
     ) where
         TaskRunner: FnMut(&Path, &TaskRecord) -> Result<HarnessRunOutput>,
         EvalRunner: FnMut(&Path, &ArgusCodeConfig, &Path) -> Result<EvalRunOutput>,
+        RouteRunner: FnMut(&Path, &TaskRecord, &str, &str) -> Result<RouteRunOutput>,
     {
         let mut parts = raw.split_whitespace();
         let command = parts.next().unwrap_or_default();
@@ -323,6 +327,14 @@ impl WorkbenchApp {
             "/diff" => self.refresh_diff_preview(),
             "/map" => self.refresh_repo_map(),
             "/eval" | "/evals" => self.refresh_eval_dashboard(),
+            "/route-run" => {
+                let (cheap, strong) = self.route_models_from_args(&args);
+                if let Err(err) = self.run_latest_task_with_route(&cheap, &strong, route_runner) {
+                    self.active_pane = WorkbenchPane::Terminal;
+                    self.status = format!("Route run failed: {err}");
+                    self.terminal_log.push(format!("error: {err}"));
+                }
+            }
             "/eval-run" => {
                 let suite = args
                     .first()
@@ -385,6 +397,39 @@ impl WorkbenchApp {
                 );
             }
         }
+    }
+
+    fn route_models_from_args(&self, args: &[&str]) -> (String, String) {
+        let (default_cheap, default_strong) = self.default_route_models();
+        match args {
+            [] => (default_cheap, default_strong),
+            [cheap] => ((*cheap).to_string(), default_strong),
+            [cheap, strong, ..] => ((*cheap).to_string(), (*strong).to_string()),
+        }
+    }
+
+    fn default_route_models(&self) -> (String, String) {
+        let cheap = self.config.provider.default_model.clone();
+        let strong = if self
+            .config
+            .provider
+            .api_key_env
+            .as_deref()
+            .is_some_and(|env| env == "DEEPSEEK_API_KEY")
+            || self
+                .config
+                .provider
+                .base_url
+                .as_deref()
+                .is_some_and(|url| url.contains("deepseek"))
+        {
+            "deepseek-reasoner".to_string()
+        } else if self.config.provider.default_provider == "openai" {
+            "gpt-4o".to_string()
+        } else {
+            cheap.clone()
+        };
+        (cheap, strong)
     }
 
     fn update_sandbox_profile(&mut self, sandbox: Option<&str>) {
@@ -714,6 +759,80 @@ impl WorkbenchApp {
             format!("Eval failed: {}", output.suite.display())
         };
         Ok(())
+    }
+
+    pub fn run_latest_task_with_route<F>(
+        &mut self,
+        cheap_model: &str,
+        strong_model: &str,
+        runner: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(&Path, &TaskRecord, &str, &str) -> Result<RouteRunOutput>,
+    {
+        let Some(task) = latest_resumable_task(&self.profile.root)? else {
+            self.active_pane = WorkbenchPane::Terminal;
+            self.status = "No resumable task found.".into();
+            self.terminal_log.push("No resumable task found.".into());
+            return Ok(());
+        };
+
+        self.active_pane = WorkbenchPane::Terminal;
+        self.status = format!(
+            "Routing task {} through {} -> {}...",
+            task.id, cheap_model, strong_model
+        );
+        self.terminal_log = vec![format!(
+            "$ argus route {} --cheap {} --strong {}",
+            task.text, cheap_model, strong_model
+        )];
+
+        match runner(&self.profile.root, &task, cheap_model, strong_model) {
+            Ok(output) => {
+                if !output.stdout.trim().is_empty() {
+                    self.terminal_log.push(output.stdout);
+                }
+                if !output.stderr.trim().is_empty() {
+                    self.terminal_log.push(output.stderr);
+                }
+                self.terminal_log.push(format!(
+                    "route: {} -> {}",
+                    output.cheap_model, output.strong_model
+                ));
+                self.terminal_log.push(format!("status: {}", output.status));
+                self.terminal_log
+                    .push(format!("trace: {}", output.trace.display()));
+                self.task_queue = list_tasks(&self.profile.root)?;
+                self.session_history = list_sessions(&self.profile.root)?;
+                self.latest_trace_path = self
+                    .session_history
+                    .last()
+                    .map(|session| session.trace.clone())
+                    .or_else(|| Some(output.trace.clone()));
+                self.diff_preview = load_diff_preview(&self.profile.root)?;
+                self.trace_preview =
+                    load_trace_preview(&self.profile.root, self.latest_trace_path.as_deref());
+                self.status = format!(
+                    "Route task {} {}: {} -> {}",
+                    output.task_id, output.status, output.cheap_model, output.strong_model
+                );
+                Ok(())
+            }
+            Err(err) => {
+                self.task_queue = list_tasks(&self.profile.root)?;
+                self.session_history = list_sessions(&self.profile.root)?;
+                self.latest_trace_path = self
+                    .session_history
+                    .last()
+                    .map(|session| session.trace.clone());
+                self.diff_preview = load_diff_preview(&self.profile.root)?;
+                self.trace_preview =
+                    load_trace_preview(&self.profile.root, self.latest_trace_path.as_deref());
+                self.status = format!("Route run failed: {err}");
+                self.terminal_log.push(format!("error: {err}"));
+                Err(err)
+            }
+        }
     }
 
     pub fn run_verify_gate(&mut self) -> Result<()> {
@@ -1117,6 +1236,7 @@ plan -> edit -> verify -> repair -> trace\n\n\
 Slash commands\n\
 /verify  Run verification gate\n\
 /run     Run latest queued task\n\
+/route-run Route latest task through cheap/strong models\n\
 /map     Refresh repo map\n\
 /evals   Refresh eval dashboard\n\
 /eval-run Run smoke eval or a suite path\n\
@@ -1179,6 +1299,7 @@ mod tests {
     use crate::eval_runner::EvalRunOutput;
     use crate::harness::HarnessRunOutput;
     use crate::project::build_config;
+    use crate::route_runner::RouteRunOutput;
     use crate::sessions::append_session;
     use crate::tasks::{list_tasks, queue_task};
     use argus_trace::{EventKind, TraceWriter};
@@ -1792,8 +1913,19 @@ mod tests {
                     stderr: String::new(),
                 })
             };
+        let mut route_runner =
+            |_root: &Path,
+             _task: &TaskRecord,
+             _cheap: &str,
+             _strong: &str|
+             -> Result<RouteRunOutput> { panic!("eval-run must not invoke route") };
 
-        app.execute_slash_command_with("/eval-run", &mut task_runner, &mut eval_runner);
+        app.execute_slash_command_with(
+            "/eval-run",
+            &mut task_runner,
+            &mut eval_runner,
+            &mut route_runner,
+        );
 
         assert_eq!(
             seen_suite.unwrap(),
@@ -1817,6 +1949,77 @@ mod tests {
             app.eval_dashboard.contains("demo smoke"),
             "{}",
             app.eval_dashboard
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_route_run_executes_latest_task_with_explicit_models() {
+        let dir = temp_dir("slash-route-run");
+        std::fs::create_dir_all(&dir).unwrap();
+        let task = queue_task(&dir, "fix route regression").unwrap();
+        let seed = app_with_root(dir.clone());
+        let mut app = WorkbenchApp::load(seed.profile, seed.config).unwrap();
+
+        let mut task_runner = |_root: &Path, _task: &TaskRecord| -> Result<HarnessRunOutput> {
+            panic!("route-run must not invoke the direct task harness")
+        };
+        let mut eval_runner =
+            |_root: &Path, _config: &ArgusCodeConfig, _suite: &Path| -> Result<EvalRunOutput> {
+                panic!("route-run must not invoke eval")
+            };
+        let mut seen = None;
+        let mut route_runner =
+            |root: &Path, task: &TaskRecord, cheap: &str, strong: &str| -> Result<RouteRunOutput> {
+                seen = Some((task.id.clone(), cheap.to_string(), strong.to_string()));
+                crate::tasks::update_task_status(root, &task.id, "done").unwrap();
+                Ok(RouteRunOutput {
+                    task_id: task.id.clone(),
+                    task_text: task.text.clone(),
+                    status: "done".into(),
+                    trace: PathBuf::from(".argus/tasks/route.trace.jsonl"),
+                    cheap_model: cheap.into(),
+                    strong_model: strong.into(),
+                    stdout: "route: escalated cheap-model -> strong-model (passed)\n".into(),
+                    stderr: "(trace written to .argus/tasks/route.trace.jsonl)\n".into(),
+                })
+            };
+
+        app.execute_slash_command_with(
+            "/route-run cheap-model strong-model",
+            &mut task_runner,
+            &mut eval_runner,
+            &mut route_runner,
+        );
+
+        assert_eq!(
+            seen,
+            Some((
+                task.id,
+                "cheap-model".to_string(),
+                "strong-model".to_string()
+            ))
+        );
+        assert_eq!(app.active_pane, WorkbenchPane::Terminal);
+        assert_eq!(app.task_queue[0].status, "done");
+        assert!(app.status.contains("Route task"), "{}", app.status);
+        let terminal = app.terminal_log.join("\n");
+        assert!(
+            terminal.contains("$ argus route"),
+            "route command missing: {terminal}"
+        );
+        assert!(
+            terminal.contains("--cheap cheap-model --strong strong-model"),
+            "models missing: {terminal}"
+        );
+        assert!(
+            terminal.contains("route: escalated cheap-model -> strong-model"),
+            "stdout missing: {terminal}"
+        );
+        assert!(
+            terminal.contains("trace: .argus/tasks/route.trace.jsonl"),
+            "trace missing: {terminal}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

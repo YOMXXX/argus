@@ -118,10 +118,11 @@ ArgusCode ships a built-in **mock provider**, so you can see the workbench and t
 arguscode
 # Inside the TUI, type a task and press Enter to persist it to the local queue.
 # Press Ctrl+K, then run the latest queued task through the harness.
+# Use /route-run [cheap] [strong] to try a cheaper model before escalating.
 # The Trace panel shows recent session history and the latest task trace timeline.
 # The session panel shows git status/diff preview and can refresh it from Ctrl+K.
 # The Terminal panel can run the configured verification gate from Ctrl+K.
-# The input box also supports slash commands such as /verify, /run, /diff, and /history.
+# The input box also supports slash commands such as /verify, /run, /route-run, /diff, and /history.
 # Switch models in-session with /provider deepseek deepseek-chat or /model <name>.
 # Manage the queue in-session with /tasks, /cancel <task-id>, and /retry <task-id>.
 # Tune execution safety with /sandbox read-only|workspace-write|trusted and /approval auto|ask.

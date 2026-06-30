@@ -5,6 +5,7 @@ pub mod eval_runner;
 pub mod harness;
 pub mod project;
 pub mod repo_map;
+pub mod route_runner;
 pub mod sessions;
 pub mod tasks;
 pub mod trace_view;
