@@ -12,6 +12,7 @@
 - Added `arguscode task` and `arguscode resume` with a local `.argus/tasks/queue.jsonl` task queue.
 - Connected Workbench input to the local task queue so tasks entered in the TUI persist across sessions.
 - Added `arguscode resume --run` to execute the latest queued task through the Argus harness and write a per-task trace.
+- Added `arguscode verify` to run the detected project verification gate directly from the ArgusCode entrypoint.
 - Updated release packaging and installer support so archives install both `argus` and `arguscode`.
 
 ## 0.1.1 - 2026-06-30

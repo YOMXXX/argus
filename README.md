@@ -125,6 +125,7 @@ arguscode init
 arguscode task "fix the failing parser test"
 arguscode resume
 arguscode resume --run
+arguscode verify
 
 # The money shot: gate catches fake done, the agent fixes, trace records it.
 argus demo

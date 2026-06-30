@@ -4,6 +4,7 @@ use argus_cli::tasks::{
     latest_resumable_task, list_tasks, queue_task, update_task_status, TaskRecord,
 };
 use argus_cli::workbench::{ensure_config, run_workbench};
+use argus_core::{CommandVerifier, Verifier};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::process::Command;
@@ -50,11 +51,14 @@ enum Commands {
         #[arg(long)]
         run: bool,
     },
+    /// Run the configured project verification gate.
+    Verify,
     /// Check local project readiness for ArgusCode.
     Doctor,
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
     let cwd = std::env::current_dir()?;
     if cli.status {
@@ -71,6 +75,7 @@ fn main() -> Result<()> {
         Commands::Chat { task } => chat(&cwd, task),
         Commands::Task { task } => task_command(&cwd, task),
         Commands::Resume { run } => resume(&cwd, run),
+        Commands::Verify => verify(&cwd).await,
         Commands::Doctor => doctor(&cwd),
     }
 }
@@ -173,6 +178,25 @@ fn argus_binary_path() -> Result<PathBuf> {
         Ok(sibling)
     } else {
         Ok(PathBuf::from(binary_name))
+    }
+}
+
+async fn verify(cwd: &std::path::Path) -> Result<()> {
+    let (profile, config) = ensure_config(cwd)?;
+    println!("ArgusCode verify");
+    for command in &config.verify.commands {
+        println!("$ {command}");
+    }
+    let result = CommandVerifier::new(&profile.root, config.verify.commands.clone())
+        .verify()
+        .await;
+    println!("{}", result.detail);
+    if result.passed {
+        println!("verification passed");
+        Ok(())
+    } else {
+        println!("verification failed");
+        anyhow::bail!("verification failed")
     }
 }
 

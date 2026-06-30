@@ -223,6 +223,31 @@ fn arguscode_status_auto_initializes_and_reports_project() {
 }
 
 #[test]
+fn arguscode_verify_runs_project_gate() {
+    let dir = std::env::temp_dir().join(format!("arguscode-verify-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("package.json"),
+        "{\"scripts\":{\"test\":\"echo ok\"}}\n",
+    )
+    .unwrap();
+
+    let out = Command::new(arguscode_bin())
+        .arg("verify")
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "arguscode verify failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("ArgusCode verify"), "stdout: {stdout}");
+    assert!(stdout.contains("npm test"), "stdout: {stdout}");
+    assert!(stdout.contains("verification passed"), "stdout: {stdout}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn arguscode_task_queues_lists_and_resume_reports_latest_task() {
     let dir = std::env::temp_dir().join(format!("arguscode-task-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
