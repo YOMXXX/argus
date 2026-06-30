@@ -1,6 +1,7 @@
 use crate::config::{ArgusCodeConfig, CONFIG_PATH};
 use crate::harness::{run_task_through_harness, HarnessRunOutput};
 use crate::project::{detect_project, init_project, ProjectProfile};
+use crate::sessions::{list_sessions, SessionRecord};
 use crate::tasks::{latest_resumable_task, list_tasks, queue_task, TaskRecord};
 use anyhow::Result;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -35,6 +36,7 @@ enum PaletteAction {
     RunLatestTask,
     Verify,
     Memory,
+    History,
     SmokeEval,
     NewTask,
 }
@@ -63,6 +65,11 @@ const PALETTE_ITEMS: &[PaletteItem] = &[
         detail: "Focus Trace / Memory and show durable project context",
     },
     PaletteItem {
+        action: PaletteAction::History,
+        label: "Open session history",
+        detail: "Focus Trace / Memory and review completed task sessions",
+    },
+    PaletteItem {
         action: PaletteAction::SmokeEval,
         label: "Open smoke eval",
         detail: "Prepare the generated .argus/evals/smoke.json suite",
@@ -82,6 +89,7 @@ pub struct WorkbenchApp {
     pub mode: WorkbenchMode,
     pub palette_selected: usize,
     pub task_queue: Vec<TaskRecord>,
+    pub session_history: Vec<SessionRecord>,
     pub terminal_log: Vec<String>,
     pub latest_trace_path: Option<PathBuf>,
     pub input: String,
@@ -90,19 +98,27 @@ pub struct WorkbenchApp {
 
 impl WorkbenchApp {
     pub fn new(profile: ProjectProfile, config: ArgusCodeConfig) -> Self {
-        Self::with_task_queue(profile, config, Vec::new())
+        Self::with_state(profile, config, Vec::new(), Vec::new())
     }
 
     pub fn load(profile: ProjectProfile, config: ArgusCodeConfig) -> Result<Self> {
         let task_queue = list_tasks(&profile.root)?;
-        Ok(Self::with_task_queue(profile, config, task_queue))
+        let session_history = list_sessions(&profile.root)?;
+        Ok(Self::with_state(
+            profile,
+            config,
+            task_queue,
+            session_history,
+        ))
     }
 
-    fn with_task_queue(
+    fn with_state(
         profile: ProjectProfile,
         config: ArgusCodeConfig,
         task_queue: Vec<TaskRecord>,
+        session_history: Vec<SessionRecord>,
     ) -> Self {
+        let latest_trace_path = session_history.last().map(|session| session.trace.clone());
         Self {
             profile,
             config,
@@ -110,8 +126,9 @@ impl WorkbenchApp {
             mode: WorkbenchMode::Normal,
             palette_selected: 0,
             task_queue,
+            session_history,
             terminal_log: Vec::new(),
-            latest_trace_path: None,
+            latest_trace_path,
             input: String::new(),
             status: "Ready. Type a task, Tab switches panes, Ctrl+K opens command palette.".into(),
         }
@@ -199,6 +216,13 @@ impl WorkbenchApp {
                 self.active_pane = WorkbenchPane::Trace;
                 self.status = format!("Memory opened: {}", self.config.memory.project);
             }
+            PaletteAction::History => {
+                self.active_pane = WorkbenchPane::Trace;
+                self.status = format!(
+                    "Session history opened: {} run(s)",
+                    self.session_history.len()
+                );
+            }
             PaletteAction::SmokeEval => {
                 self.active_pane = WorkbenchPane::Trace;
                 self.status = "Smoke eval ready: argus eval .argus/evals/smoke.json".into();
@@ -238,11 +262,13 @@ impl WorkbenchApp {
                 self.terminal_log
                     .push(format!("trace: {}", output.trace.display()));
                 self.task_queue = list_tasks(&self.profile.root)?;
+                self.session_history = list_sessions(&self.profile.root)?;
                 self.status = format!("Task {} {}", output.task_id, output.status);
                 Ok(())
             }
             Err(err) => {
                 self.task_queue = list_tasks(&self.profile.root)?;
+                self.session_history = list_sessions(&self.profile.root)?;
                 self.status = format!("Harness run failed: {err}");
                 self.terminal_log.push(format!("error: {err}"));
                 Err(err)
@@ -510,6 +536,19 @@ fn render_trace(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
         lines.push(Line::from("Latest task trace"));
         lines.push(Line::from(trace_path.display().to_string()));
     }
+    lines.push(Line::from(""));
+    lines.push(Line::from("Session History"));
+    if app.session_history.is_empty() {
+        lines.push(Line::from("(empty)"));
+    } else {
+        for session in app.session_history.iter().rev().take(4) {
+            lines.push(Line::from(format!(
+                "[{}] {}",
+                session.status, session.task_text
+            )));
+            lines.push(Line::from(session.trace.display().to_string()));
+        }
+    }
     f.render_widget(
         Paragraph::new(lines)
             .block(panel_block(
@@ -641,6 +680,7 @@ mod tests {
     use super::*;
     use crate::harness::HarnessRunOutput;
     use crate::project::build_config;
+    use crate::sessions::append_session;
     use crate::tasks::{list_tasks, queue_task};
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::KeyModifiers;
@@ -737,6 +777,33 @@ mod tests {
 
         assert_eq!(app.active_pane, WorkbenchPane::Trace);
         assert!(app.status.contains("Memory"), "{}", app.status);
+    }
+
+    #[test]
+    fn command_palette_opens_session_history() {
+        let dir = temp_dir("history-action");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = app_with_root(dir.clone());
+        append_session(
+            &dir,
+            "task-1",
+            "review the diff",
+            "done",
+            ".argus/tasks/task-1.trace.jsonl",
+        )
+        .unwrap();
+        app = WorkbenchApp::load(app.profile, app.config).unwrap();
+
+        handle_key(&mut app, KeyCode::Char('k'), KeyModifiers::CONTROL);
+        handle_key(&mut app, KeyCode::Down, KeyModifiers::empty());
+        handle_key(&mut app, KeyCode::Down, KeyModifiers::empty());
+        handle_key(&mut app, KeyCode::Down, KeyModifiers::empty());
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert_eq!(app.active_pane, WorkbenchPane::Trace);
+        assert!(app.status.contains("Session history"), "{}", app.status);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -855,6 +922,45 @@ mod tests {
             .collect();
         assert!(text.contains("model output"), "{text}");
         assert!(text.contains("fake.trace.jsonl"), "{text}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workbench_loads_and_renders_session_history() {
+        let dir = temp_dir("session-history");
+        std::fs::create_dir_all(&dir).unwrap();
+        let app = app_with_root(dir.clone());
+        append_session(
+            &dir,
+            "task-1",
+            "ship the history panel",
+            "done",
+            ".argus/tasks/task-1.trace.jsonl",
+        )
+        .unwrap();
+
+        let app = WorkbenchApp::load(app.profile, app.config).unwrap();
+
+        assert_eq!(app.session_history.len(), 1);
+        assert_eq!(app.session_history[0].task_text, "ship the history panel");
+        assert_eq!(
+            app.latest_trace_path,
+            Some(PathBuf::from(".argus/tasks/task-1.trace.jsonl"))
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 32)).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("Session History"), "{text}");
+        assert!(text.contains("ship the history panel"), "{text}");
+        assert!(text.contains("task-1.trace.jsonl"), "{text}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
