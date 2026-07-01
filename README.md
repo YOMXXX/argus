@@ -132,7 +132,7 @@ arguscode
 # Capture durable lessons with /remember <lesson> and refresh memory with /memory.
 # Attach MCP tools with /mcp <server command> and /mcp-allow <tool-name>.
 # Save and restore risky edits with /checkpoint [label] and /rollback [checkpoint-id].
-# Review the result with /review or /patch, then /accept <note> or /rework <follow-up task>.
+# Review patch summary and changed files with /review or /patch, then /accept <note> or /rework <follow-up task>.
 # Refresh codebase shape with /map for top directories, extensions, rules, and verify commands.
 # Inspect eval suites with /evals, then run smoke or a suite path with /eval-run.
 # Check launch readiness with /launch or `arguscode launch`.

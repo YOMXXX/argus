@@ -1,4 +1,4 @@
-use crate::workspace_filter::reviewable_status_lines;
+use crate::workspace_filter::{is_argus_runtime_status_line, reviewable_status_lines};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -18,11 +18,16 @@ pub fn load_change_review(root: &Path) -> Result<String> {
     let status = run_git(root, ["status", "--short", "--untracked-files=all"])?;
     let stat = run_git(root, ["diff", "--stat"])?;
     let staged = run_git(root, ["diff", "--cached", "--stat"])?;
+    let numstat = run_git(root, ["diff", "--numstat"])?;
+    let staged_numstat = run_git(root, ["diff", "--cached", "--numstat"])?;
+    let diff = run_git(root, ["diff", "--unified=0"])?;
+    let staged_diff = run_git(root, ["diff", "--cached", "--unified=0"])?;
     let status = reviewable_status_lines(&status)
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
     let stat = stat.trim();
     let staged = staged.trim();
+    let summary = patch_summary(&status, &numstat, &staged_numstat, &diff, &staged_diff);
 
     let mut lines = Vec::new();
     lines.push("Change Review".to_string());
@@ -36,6 +41,11 @@ pub fn load_change_review(root: &Path) -> Result<String> {
         for line in status.iter().take(18) {
             lines.push(format_change_file(line));
         }
+    }
+    if !status.is_empty() {
+        lines.push("".into());
+        lines.push("Patch Summary".into());
+        lines.extend(render_patch_summary(&summary));
     }
     if !stat.is_empty() {
         lines.push("".into());
@@ -54,6 +64,78 @@ pub fn load_change_review(root: &Path) -> Result<String> {
     lines.push("- /rework <task> to queue a follow-up".into());
     lines.push("- /rollback to restore the last checkpoint".into());
     Ok(lines.join("\n"))
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct PatchSummary {
+    files: usize,
+    hunks: usize,
+    insertions: usize,
+    deletions: usize,
+}
+
+fn patch_summary(
+    status: &[String],
+    numstat: &str,
+    staged_numstat: &str,
+    diff: &str,
+    staged_diff: &str,
+) -> PatchSummary {
+    let mut summary = PatchSummary {
+        files: status.len(),
+        ..PatchSummary::default()
+    };
+    add_numstat(&mut summary, numstat);
+    add_numstat(&mut summary, staged_numstat);
+    summary.hunks += count_reviewable_hunks(diff);
+    summary.hunks += count_reviewable_hunks(staged_diff);
+    summary
+}
+
+fn render_patch_summary(summary: &PatchSummary) -> Vec<String> {
+    vec![
+        format!("- reviewable files: {}", summary.files),
+        format!("- hunks: {}", summary.hunks),
+        format!("- insertions: {}", summary.insertions),
+        format!("- deletions: {}", summary.deletions),
+    ]
+}
+
+fn add_numstat(summary: &mut PatchSummary, numstat: &str) {
+    for line in numstat.lines() {
+        let mut parts = line.split('\t');
+        let Some(insertions) = parts.next() else {
+            continue;
+        };
+        let Some(deletions) = parts.next() else {
+            continue;
+        };
+        let Some(path) = parts.next() else {
+            continue;
+        };
+        if is_argus_runtime_status_line(path) {
+            continue;
+        }
+        summary.insertions += parse_numstat_count(insertions);
+        summary.deletions += parse_numstat_count(deletions);
+    }
+}
+
+fn parse_numstat_count(value: &str) -> usize {
+    value.parse::<usize>().unwrap_or(0)
+}
+
+fn count_reviewable_hunks(diff: &str) -> usize {
+    let mut current_path_reviewable = true;
+    let mut hunks = 0;
+    for line in diff.lines() {
+        if let Some(path) = line.strip_prefix("diff --git a/") {
+            current_path_reviewable = !is_argus_runtime_status_line(path);
+        } else if current_path_reviewable && line.starts_with("@@ ") {
+            hunks += 1;
+        }
+    }
+    hunks
 }
 
 fn format_change_file(status_line: &str) -> String {
@@ -170,6 +252,47 @@ mod tests {
         assert!(review.contains("Changed files"), "{review}");
         assert!(review.contains("- ?? new-file.txt"), "{review}");
         assert!(review.contains("Next actions"), "{review}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_change_review_includes_patch_summary_for_tracked_diff() {
+        let dir = temp_dir("patch-summary");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::fs::write(dir.join("tracked.txt"), "one\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "tracked.txt"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "user.name=Argus Test",
+                "commit",
+                "-m",
+                "seed",
+            ])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::fs::write(dir.join("tracked.txt"), "one\ntwo\nthree\n").unwrap();
+
+        let review = super::load_change_review(&dir).unwrap();
+
+        assert!(review.contains("Patch Summary"), "{review}");
+        assert!(review.contains("reviewable files: 1"), "{review}");
+        assert!(review.contains("hunks: 1"), "{review}");
+        assert!(review.contains("insertions: 2"), "{review}");
+        assert!(review.contains("deletions: 0"), "{review}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -28,6 +28,7 @@
 - Added Workbench eval dashboard scanning for `.argus/evals/*.json` suites and cases.
 - Added Workbench workflow status and an Execution Cockpit journal for queue, run, verify, review, rework, checkpoint, route, and eval events.
 - Added patch-review friendly Workbench review output that filters Argus runtime metadata and lists changed files.
+- Added Workbench patch summaries with reviewable file, hunk, insertion, and deletion counts.
 - Added agent-compatibility aliases, combined rule-file import, and `arguscode health` compatibility reporting.
 - Added a durable Workbench planning engine with `/plan`, `/next`, and `/done` backed by `.argus/plans/current.json`.
 - Added verify-failure classification and automatic Workbench repair task generation.
