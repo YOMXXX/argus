@@ -1,3 +1,4 @@
+use crate::background::{load_background_run, record_background_run, BackgroundRun};
 use crate::checkpoints::{create_checkpoint, latest_checkpoint, restore_checkpoint};
 use crate::cockpit::{append_cockpit_event, load_cockpit_journal};
 use crate::config::{ArgusCodeConfig, CONFIG_PATH, SMOKE_EVAL_PATH};
@@ -30,6 +31,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::{backend::CrosstermBackend, Frame, Terminal};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkbenchPane {
@@ -130,6 +132,7 @@ pub struct WorkbenchApp {
     pub latest_trace_path: Option<PathBuf>,
     pub input: String,
     pub status: String,
+    background_run_seen: Option<String>,
 }
 
 struct WorkbenchLoadedData {
@@ -229,6 +232,7 @@ impl WorkbenchApp {
             latest_trace_path,
             input: String::new(),
             status: "Ready. Type a task, Tab switches panes, Ctrl+K opens command palette.".into(),
+            background_run_seen: None,
         }
     }
 
@@ -289,9 +293,9 @@ impl WorkbenchApp {
         self.mode = WorkbenchMode::Normal;
         match action {
             PaletteAction::RunLatestTask => {
-                if let Err(err) = self.run_latest_task_with(&mut run_task_through_harness) {
+                if let Err(err) = self.start_latest_task_background() {
                     self.active_pane = WorkbenchPane::Terminal;
-                    self.status = format!("Harness run failed: {err}");
+                    self.status = format!("Could not start background run: {err}");
                     self.terminal_log.push(format!("error: {err}"));
                 }
             }
@@ -328,6 +332,15 @@ impl WorkbenchApp {
     }
 
     fn execute_slash_command(&mut self, raw: &str) {
+        let command = raw.split_whitespace().next().unwrap_or_default();
+        if matches!(command, "/run" | "/resume" | "/continue") {
+            if let Err(err) = self.start_latest_task_background() {
+                self.active_pane = WorkbenchPane::Terminal;
+                self.status = format!("Could not start background run: {err}");
+                self.terminal_log.push(format!("error: {err}"));
+            }
+            return;
+        }
         let mut task_runner = run_task_through_harness;
         let mut eval_runner = run_eval_suite;
         let mut route_runner = run_task_through_route;
@@ -1008,6 +1021,55 @@ impl WorkbenchApp {
         }
     }
 
+    pub fn tick(&mut self) {
+        self.refresh_cockpit_journal_silent();
+        let Ok(Some(run)) = load_background_run(&self.profile.root) else {
+            return;
+        };
+        let marker = background_run_marker(&run);
+        if self.background_run_seen.as_deref() == Some(marker.as_str()) {
+            return;
+        }
+        self.background_run_seen = Some(marker);
+        match run.status.as_str() {
+            "running" => {
+                self.status = format!("Background run active: {}", run.task_id);
+            }
+            "done" => {
+                self.refresh_after_background_run(&run);
+                self.status = format!("Background run done: {}", run.task_id);
+            }
+            "failed" => {
+                self.refresh_after_background_run(&run);
+                self.status = format!("Background run failed: {}", run.task_id);
+            }
+            _ => {}
+        }
+    }
+
+    fn refresh_after_background_run(&mut self, run: &BackgroundRun) {
+        self.task_queue =
+            list_tasks(&self.profile.root).unwrap_or_else(|_| self.task_queue.clone());
+        self.session_history =
+            list_sessions(&self.profile.root).unwrap_or_else(|_| self.session_history.clone());
+        self.latest_trace_path = run.trace.clone().or_else(|| {
+            self.session_history
+                .last()
+                .map(|session| session.trace.clone())
+        });
+        self.diff_preview = load_diff_preview(&self.profile.root)
+            .unwrap_or_else(|err| format!("Could not refresh diff: {err}"));
+        self.change_review = load_change_review(&self.profile.root)
+            .unwrap_or_else(|err| format!("Could not refresh change review: {err}"));
+        self.workflow_status =
+            load_workflow_status(&self.profile.root, &self.config.verify.commands)
+                .unwrap_or_else(|err| format!("Could not refresh workflow status: {err}"));
+        self.trace_preview =
+            load_trace_preview(&self.profile.root, self.latest_trace_path.as_deref());
+        self.refresh_cockpit_journal_silent();
+        self.terminal_log.push(run.detail.clone());
+    }
+
     fn refresh_change_review(&mut self) {
         self.active_pane = WorkbenchPane::Session;
         match load_change_review(&self.profile.root) {
@@ -1075,6 +1137,75 @@ impl WorkbenchApp {
                 self.status = format!("Could not queue rework task: {err}");
             }
         }
+    }
+
+    pub fn start_latest_task_background(&mut self) -> Result<()> {
+        self.start_latest_task_background_with(|root, task| run_task_through_harness(&root, &task))
+    }
+
+    pub fn start_latest_task_background_with<F>(&mut self, runner: F) -> Result<()>
+    where
+        F: FnOnce(PathBuf, TaskRecord) -> Result<HarnessRunOutput> + Send + 'static,
+    {
+        let Some(task) = latest_resumable_task(&self.profile.root)? else {
+            self.active_pane = WorkbenchPane::Terminal;
+            self.status = "No resumable task found.".into();
+            self.terminal_log.push("No resumable task found.".into());
+            return Ok(());
+        };
+        let checkpoint = create_checkpoint(
+            &self.profile.root,
+            &format!("before task {} background run", task.id),
+        )?;
+        let trace = PathBuf::from(".argus/tasks").join(format!("{}.trace.jsonl", task.id));
+        let state = record_background_run(
+            &self.profile.root,
+            &task.id,
+            "running",
+            &format!("task {} running in background", task.id),
+            Some(trace.clone()),
+        )?;
+        self.background_run_seen = Some(background_run_marker(&state));
+
+        self.active_pane = WorkbenchPane::Terminal;
+        self.terminal_log = vec![
+            format!("checkpoint: {}", checkpoint.id),
+            format!("background: {}", task.id),
+            format!("trace: {}", trace.display()),
+        ];
+        self.record_cockpit_event(
+            "background",
+            &format!("started task {} in background", task.id),
+            "watch cockpit and trace panels",
+        );
+        self.status = format!("Background run started: {}", task.id);
+
+        let root = self.profile.root.clone();
+        let task_id = task.id.clone();
+        std::thread::spawn(move || {
+            let result = runner(root.clone(), task);
+            match result {
+                Ok(output) => {
+                    let _ = record_background_run(
+                        &root,
+                        &output.task_id,
+                        "done",
+                        &format!("task {} completed with status done", output.task_id),
+                        Some(output.trace),
+                    );
+                }
+                Err(err) => {
+                    let _ = record_background_run(
+                        &root,
+                        &task_id,
+                        "failed",
+                        &format!("task {task_id} failed: {err}"),
+                        None,
+                    );
+                }
+            }
+        });
+        Ok(())
     }
 
     pub fn run_latest_task_with<F>(&mut self, runner: &mut F) -> Result<()>
@@ -1382,6 +1513,10 @@ impl WorkbenchApp {
     }
 }
 
+fn background_run_marker(run: &BackgroundRun) -> String {
+    format!("{}:{}:{}", run.task_id, run.status, run.updated_ms)
+}
+
 pub fn handle_key(app: &mut WorkbenchApp, code: KeyCode, modifiers: KeyModifiers) -> bool {
     match app.mode {
         WorkbenchMode::Help => match code {
@@ -1451,7 +1586,11 @@ fn event_loop(
 ) -> Result<()> {
     loop {
         terminal.draw(|f| ui(f, app))?;
-        if let Event::Key(key) = event::read()? {
+        if event::poll(Duration::from_millis(250))? {
+            let Event::Key(key) = event::read()? else {
+                app.tick();
+                continue;
+            };
             if key.kind == KeyEventKind::Press {
                 match key.code {
                     _ if !handle_key(app, key.code, key.modifiers) => break,
@@ -1459,6 +1598,7 @@ fn event_loop(
                 }
             }
         }
+        app.tick();
     }
     Ok(())
 }
@@ -3148,6 +3288,124 @@ mod tests {
             std::fs::read_to_string(dir.join("main.rs")).unwrap(),
             "before\n"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn workbench_starts_latest_task_in_background_and_refreshes_completion() {
+        let dir = temp_dir("background-run");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            "{\"scripts\":{\"test\":\"echo ok\"}}\n",
+        )
+        .unwrap();
+        let record = queue_task(&dir, "run without blocking the tui").unwrap();
+        let seed = app_with_root(dir.clone());
+        let mut app = WorkbenchApp::load(seed.profile, seed.config).unwrap();
+
+        app.start_latest_task_background_with(|root, task| {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            crate::tasks::update_task_status(&root, &task.id, "done").unwrap();
+            crate::cockpit::append_cockpit_event(
+                &root,
+                "harness",
+                &format!("task {} completed with status done", task.id),
+                "/review",
+            )
+            .unwrap();
+            Ok(HarnessRunOutput {
+                task_id: task.id.clone(),
+                task_text: task.text.clone(),
+                status: "done".into(),
+                trace: PathBuf::from(".argus/tasks/background.trace.jsonl"),
+                stdout: "background output".into(),
+                stderr: String::new(),
+            })
+        })
+        .unwrap();
+
+        let started = crate::background::load_background_run(&dir)
+            .unwrap()
+            .unwrap();
+        assert_eq!(started.task_id, record.id);
+        assert!(
+            matches!(started.status.as_str(), "running" | "done"),
+            "{started:?}"
+        );
+        assert!(
+            app.status.contains("Background run started"),
+            "{}",
+            app.status
+        );
+
+        let mut completed = None;
+        for _ in 0..40 {
+            app.tick();
+            completed = crate::background::load_background_run(&dir).unwrap();
+            if completed
+                .as_ref()
+                .is_some_and(|state| state.status == "done")
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let completed = completed.expect("background run status should exist");
+        assert_eq!(completed.status, "done", "{completed:?}");
+        assert!(
+            app.cockpit_journal.contains("completed with status done"),
+            "{}",
+            app.cockpit_journal
+        );
+        assert!(app.status.contains("Background run done"), "{}", app.status);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_run_default_path_starts_background_run_state() {
+        let dir = temp_dir("slash-background-run");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            "{\"scripts\":{\"test\":\"echo ok\"}}\n",
+        )
+        .unwrap();
+        let record = queue_task(&dir, "start from slash run").unwrap();
+        let seed = app_with_root(dir.clone());
+        let mut app = WorkbenchApp::load(seed.profile, seed.config).unwrap();
+
+        for c in "/run".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        let state = crate::background::load_background_run(&dir)
+            .unwrap()
+            .unwrap();
+        assert_eq!(state.task_id, record.id);
+        assert!(
+            matches!(state.status.as_str(), "running" | "done"),
+            "{state:?}"
+        );
+        assert!(
+            app.status.contains("Background run started"),
+            "{}",
+            app.status
+        );
+
+        for _ in 0..40 {
+            let state = crate::background::load_background_run(&dir).unwrap();
+            if state
+                .as_ref()
+                .is_some_and(|state| state.status != "running")
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }
