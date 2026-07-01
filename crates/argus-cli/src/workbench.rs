@@ -74,6 +74,16 @@ struct PaletteItem {
     detail: &'static str,
 }
 
+impl PaletteItem {
+    fn matches_query(&self, query: &str) -> bool {
+        let label = self.label.to_ascii_lowercase();
+        let detail = self.detail.to_ascii_lowercase();
+        query
+            .split_whitespace()
+            .all(|term| label.contains(term) || detail.contains(term))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SlashCommandHint {
     command: &'static str,
@@ -387,6 +397,7 @@ pub struct WorkbenchApp {
     pub active_pane: WorkbenchPane,
     pub mode: WorkbenchMode,
     pub palette_selected: usize,
+    pub palette_query: String,
     pub task_queue: Vec<TaskRecord>,
     pub session_history: Vec<SessionRecord>,
     pub diff_preview: String,
@@ -489,6 +500,7 @@ impl WorkbenchApp {
             active_pane: WorkbenchPane::Session,
             mode: WorkbenchMode::Normal,
             palette_selected: 0,
+            palette_query: String::new(),
             task_queue: data.task_queue,
             session_history: data.session_history,
             diff_preview: data.diff_preview,
@@ -557,7 +569,9 @@ impl WorkbenchApp {
     fn open_palette(&mut self) {
         self.mode = WorkbenchMode::CommandPalette;
         self.palette_selected = 0;
-        self.status = "Command palette open. Up/Down select, Enter run, Esc close.".into();
+        self.palette_query.clear();
+        self.status =
+            "Command palette open. Type to search, Up/Down select, Enter run, Esc close.".into();
     }
 
     fn close_overlay(&mut self) {
@@ -566,19 +580,49 @@ impl WorkbenchApp {
     }
 
     fn palette_next(&mut self) {
-        self.palette_selected = (self.palette_selected + 1) % PALETTE_ITEMS.len();
+        let len = filtered_palette_items(&self.palette_query).len();
+        if len > 0 {
+            self.palette_selected = (self.palette_selected + 1) % len;
+        }
     }
 
     fn palette_prev(&mut self) {
+        let len = filtered_palette_items(&self.palette_query).len();
+        if len == 0 {
+            return;
+        }
         self.palette_selected = if self.palette_selected == 0 {
-            PALETTE_ITEMS.len() - 1
+            len - 1
         } else {
             self.palette_selected - 1
         };
     }
 
+    fn push_palette_query(&mut self, c: char) {
+        self.palette_query.push(c);
+        self.palette_selected = 0;
+        self.status = format!("Command palette search: {}", self.palette_query);
+    }
+
+    fn pop_palette_query(&mut self) {
+        self.palette_query.pop();
+        self.palette_selected = 0;
+        if self.palette_query.is_empty() {
+            self.status =
+                "Command palette open. Type to search, Up/Down select, Enter run, Esc close."
+                    .into();
+        } else {
+            self.status = format!("Command palette search: {}", self.palette_query);
+        }
+    }
+
     fn execute_palette_action(&mut self) {
-        let action = PALETTE_ITEMS[self.palette_selected].action;
+        let items = filtered_palette_items(&self.palette_query);
+        let Some(item) = items.get(self.palette_selected).copied() else {
+            self.status = format!("No command matches '{}'.", self.palette_query);
+            return;
+        };
+        let action = item.action;
         self.mode = WorkbenchMode::Normal;
         match action {
             PaletteAction::RunLatestTask => {
@@ -2024,11 +2068,14 @@ pub fn handle_key(app: &mut WorkbenchApp, code: KeyCode, modifiers: KeyModifiers
         },
         WorkbenchMode::CommandPalette => match code {
             KeyCode::Esc => app.close_overlay(),
-            KeyCode::Down | KeyCode::Char('j') => app.palette_next(),
-            KeyCode::Up | KeyCode::Char('k') if modifiers.is_empty() => app.palette_prev(),
+            KeyCode::Down => app.palette_next(),
+            KeyCode::Up => app.palette_prev(),
             KeyCode::Enter => app.execute_palette_action(),
+            KeyCode::Backspace => app.pop_palette_query(),
             KeyCode::Char('k') if modifiers.contains(KeyModifiers::CONTROL) => app.close_overlay(),
-            KeyCode::Char('q') if modifiers.is_empty() => return false,
+            KeyCode::Char(c) if modifiers.is_empty() || modifiers == KeyModifiers::SHIFT => {
+                app.push_palette_query(c);
+            }
             _ => {}
         },
         WorkbenchMode::Normal => match code {
@@ -2483,18 +2530,45 @@ fn edit_distance(a: &str, b: &str) -> usize {
 fn render_command_palette(f: &mut Frame, app: &WorkbenchApp) {
     let area = centered_rect(66, 52, f.area());
     f.render_widget(Clear, area);
-    let items = PALETTE_ITEMS
-        .iter()
-        .map(|item| ListItem::new(format!("{}  -  {}", item.label, item.detail)))
-        .collect::<Vec<_>>();
+    let filtered = filtered_palette_items(&app.palette_query);
+    let mut items = vec![ListItem::new(format!(
+        "Search: {}",
+        if app.palette_query.is_empty() {
+            "(type to filter)"
+        } else {
+            app.palette_query.as_str()
+        }
+    ))];
+    if filtered.is_empty() {
+        items.push(ListItem::new(format!(
+            "No command matches '{}'",
+            app.palette_query
+        )));
+    } else {
+        items.extend(
+            filtered
+                .iter()
+                .map(|item| ListItem::new(format!("{}  -  {}", item.label, item.detail))),
+        );
+    }
+    let selected = if filtered.is_empty() {
+        None
+    } else {
+        Some(app.palette_selected + 1)
+    };
     let mut state = ListState::default();
-    state.select(Some(app.palette_selected));
+    state.select(selected);
+    let title = if app.palette_query.is_empty() {
+        "Command Palette".to_string()
+    } else {
+        format!("Command Palette - {} match(es)", filtered.len())
+    };
     let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan))
-                .title("Command Palette"),
+                .title(title),
         )
         .highlight_style(
             Style::default()
@@ -2506,11 +2580,22 @@ fn render_command_palette(f: &mut Frame, app: &WorkbenchApp) {
     f.render_stateful_widget(list, area, &mut state);
 }
 
+fn filtered_palette_items(query: &str) -> Vec<&'static PaletteItem> {
+    let query = query.trim().to_ascii_lowercase();
+    if query.is_empty() {
+        return PALETTE_ITEMS.iter().collect();
+    }
+    PALETTE_ITEMS
+        .iter()
+        .filter(|item| item.matches_query(&query))
+        .collect()
+}
+
 fn render_help(f: &mut Frame) {
     let area = centered_rect(62, 48, f.area());
     f.render_widget(Clear, area);
     let text = "ArgusCode Help\n\n\
-Ctrl+K  Open command palette\n\
+Ctrl+K  Open searchable command palette\n\
 Tab     Switch pane / complete slash command\n\
 Enter   Queue task / run selected command\n\
 ?       Toggle help\n\
@@ -2951,6 +3036,78 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn command_palette_filters_items_by_typed_query() {
+        let mut app = app();
+
+        handle_key(&mut app, KeyCode::Char('k'), KeyModifiers::CONTROL);
+        for c in "diff".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 32)).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+
+        assert!(text.contains("Search: diff"), "{text}");
+        assert!(text.contains("Refresh diff preview"), "{text}");
+        assert!(!text.contains("Run latest queued task"), "{text}");
+    }
+
+    #[test]
+    fn command_palette_executes_filtered_selection() {
+        let dir = temp_dir("palette-search-diff");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let mut app = app_with_root(dir.clone());
+        app.diff_preview = "stale".into();
+        std::fs::write(dir.join("filtered.txt"), "filtered\n").unwrap();
+
+        handle_key(&mut app, KeyCode::Char('k'), KeyModifiers::CONTROL);
+        for c in "diff".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert_eq!(app.mode, WorkbenchMode::Normal);
+        assert!(
+            app.status.contains("Diff preview refreshed"),
+            "{}",
+            app.status
+        );
+        assert!(
+            app.diff_preview.contains("filtered.txt"),
+            "{}",
+            app.diff_preview
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn command_palette_keeps_open_when_query_has_no_matches() {
+        let mut app = app();
+
+        handle_key(&mut app, KeyCode::Char('k'), KeyModifiers::CONTROL);
+        for c in "zzzz".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert_eq!(app.mode, WorkbenchMode::CommandPalette);
+        assert!(app.status.contains("No command matches"), "{}", app.status);
     }
 
     #[test]
