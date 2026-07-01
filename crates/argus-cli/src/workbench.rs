@@ -74,6 +74,259 @@ struct PaletteItem {
     detail: &'static str,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SlashCommandHint {
+    command: &'static str,
+    detail: &'static str,
+}
+
+const SLASH_COMMAND_HINTS: &[SlashCommandHint] = &[
+    SlashCommandHint {
+        command: "/verify",
+        detail: "Run verification gate",
+    },
+    SlashCommandHint {
+        command: "/check",
+        detail: "Run verification gate",
+    },
+    SlashCommandHint {
+        command: "/test",
+        detail: "Run verification gate",
+    },
+    SlashCommandHint {
+        command: "/ask",
+        detail: "Queue a task from a familiar prompt",
+    },
+    SlashCommandHint {
+        command: "/add",
+        detail: "Queue a task",
+    },
+    SlashCommandHint {
+        command: "/code",
+        detail: "Queue a coding task",
+    },
+    SlashCommandHint {
+        command: "/edit",
+        detail: "Queue an edit task",
+    },
+    SlashCommandHint {
+        command: "/fix",
+        detail: "Queue a fix task",
+    },
+    SlashCommandHint {
+        command: "/implement",
+        detail: "Queue an implementation task",
+    },
+    SlashCommandHint {
+        command: "/prompt",
+        detail: "Queue a prompt-style coding task",
+    },
+    SlashCommandHint {
+        command: "/run",
+        detail: "Run latest queued task",
+    },
+    SlashCommandHint {
+        command: "/resume",
+        detail: "Run latest queued task",
+    },
+    SlashCommandHint {
+        command: "/continue",
+        detail: "Run latest queued task",
+    },
+    SlashCommandHint {
+        command: "/stop",
+        detail: "Stop active background run",
+    },
+    SlashCommandHint {
+        command: "/cancel-run",
+        detail: "Stop active background run",
+    },
+    SlashCommandHint {
+        command: "/interrupt",
+        detail: "Stop active background run",
+    },
+    SlashCommandHint {
+        command: "/logs",
+        detail: "Open terminal output",
+    },
+    SlashCommandHint {
+        command: "/terminal",
+        detail: "Open terminal output",
+    },
+    SlashCommandHint {
+        command: "/output",
+        detail: "Open terminal output",
+    },
+    SlashCommandHint {
+        command: "/trace",
+        detail: "Open trace timeline",
+    },
+    SlashCommandHint {
+        command: "/timeline",
+        detail: "Open trace timeline",
+    },
+    SlashCommandHint {
+        command: "/commands",
+        detail: "Search familiar agent command mappings",
+    },
+    SlashCommandHint {
+        command: "/cheatsheet",
+        detail: "Search familiar agent command mappings",
+    },
+    SlashCommandHint {
+        command: "/migrate",
+        detail: "Search familiar agent command mappings",
+    },
+    SlashCommandHint {
+        command: "/route-run",
+        detail: "Route latest task through cheap/strong models",
+    },
+    SlashCommandHint {
+        command: "/map",
+        detail: "Refresh repo map",
+    },
+    SlashCommandHint {
+        command: "/eval",
+        detail: "Refresh eval dashboard",
+    },
+    SlashCommandHint {
+        command: "/evals",
+        detail: "Refresh eval dashboard",
+    },
+    SlashCommandHint {
+        command: "/eval-run",
+        detail: "Run smoke eval or a suite path",
+    },
+    SlashCommandHint {
+        command: "/doctor",
+        detail: "Show agent compatibility",
+    },
+    SlashCommandHint {
+        command: "/health",
+        detail: "Show agent compatibility",
+    },
+    SlashCommandHint {
+        command: "/compat",
+        detail: "Show agent compatibility",
+    },
+    SlashCommandHint {
+        command: "/tasks",
+        detail: "Show task queue",
+    },
+    SlashCommandHint {
+        command: "/cancel",
+        detail: "Cancel a task by id",
+    },
+    SlashCommandHint {
+        command: "/retry",
+        detail: "Requeue a task by id",
+    },
+    SlashCommandHint {
+        command: "/flow",
+        detail: "Refresh workflow status",
+    },
+    SlashCommandHint {
+        command: "/status",
+        detail: "Refresh workflow status",
+    },
+    SlashCommandHint {
+        command: "/plan",
+        detail: "Create a durable work plan",
+    },
+    SlashCommandHint {
+        command: "/next",
+        detail: "Queue the next plan step",
+    },
+    SlashCommandHint {
+        command: "/done",
+        detail: "Complete current plan step with evidence",
+    },
+    SlashCommandHint {
+        command: "/launch",
+        detail: "Show launch readiness checklist",
+    },
+    SlashCommandHint {
+        command: "/readiness",
+        detail: "Show launch readiness checklist",
+    },
+    SlashCommandHint {
+        command: "/diff",
+        detail: "Refresh diff preview",
+    },
+    SlashCommandHint {
+        command: "/review",
+        detail: "Refresh change review",
+    },
+    SlashCommandHint {
+        command: "/patch",
+        detail: "Refresh patch review",
+    },
+    SlashCommandHint {
+        command: "/accept",
+        detail: "Record accepted review decision",
+    },
+    SlashCommandHint {
+        command: "/rework",
+        detail: "Queue a review follow-up task",
+    },
+    SlashCommandHint {
+        command: "/history",
+        detail: "Open session history",
+    },
+    SlashCommandHint {
+        command: "/memory",
+        detail: "Refresh project memory preview",
+    },
+    SlashCommandHint {
+        command: "/remember",
+        detail: "Append a durable lesson",
+    },
+    SlashCommandHint {
+        command: "/mcp",
+        detail: "Set or show MCP server command",
+    },
+    SlashCommandHint {
+        command: "/mcp-allow",
+        detail: "Allow an MCP tool by name",
+    },
+    SlashCommandHint {
+        command: "/checkpoint",
+        detail: "Save a rollback snapshot",
+    },
+    SlashCommandHint {
+        command: "/rollback",
+        detail: "Restore latest or named checkpoint",
+    },
+    SlashCommandHint {
+        command: "/model",
+        detail: "Set or show current model",
+    },
+    SlashCommandHint {
+        command: "/provider",
+        detail: "Set or show provider profile",
+    },
+    SlashCommandHint {
+        command: "/sandbox",
+        detail: "Set or show sandbox profile",
+    },
+    SlashCommandHint {
+        command: "/approval",
+        detail: "Set or show approval profile",
+    },
+    SlashCommandHint {
+        command: "/clear",
+        detail: "Clear terminal output",
+    },
+    SlashCommandHint {
+        command: "/help",
+        detail: "Open help",
+    },
+    SlashCommandHint {
+        command: "/new",
+        detail: "Focus new task input",
+    },
+];
+
 const PALETTE_ITEMS: &[PaletteItem] = &[
     PaletteItem {
         action: PaletteAction::RunLatestTask,
@@ -288,6 +541,19 @@ impl WorkbenchApp {
         }
     }
 
+    fn complete_slash_command(&mut self) -> bool {
+        let suggestions = slash_command_suggestions(&self.input);
+        let Some(first) = suggestions.first() else {
+            return false;
+        };
+        self.input = format!("{} ", first.command);
+        self.status = format!(
+            "Completed slash command: {} - {}",
+            first.command, first.detail
+        );
+        true
+    }
+
     fn open_palette(&mut self) {
         self.mode = WorkbenchMode::CommandPalette;
         self.palette_selected = 0;
@@ -491,9 +757,7 @@ impl WorkbenchApp {
                 self.status = "New task ready. Type in the conversation input.".into();
             }
             _ => {
-                self.status = format!(
-                    "Unknown slash command: {command}. Try /help, /verify, /run, /eval-run, /flow."
-                );
+                self.status = unknown_slash_command_status(command);
             }
         }
     }
@@ -1775,7 +2039,11 @@ pub fn handle_key(app: &mut WorkbenchApp, code: KeyCode, modifiers: KeyModifiers
                 app.mode = WorkbenchMode::Help;
                 app.status = "Help open. Press ? or Esc to close.".into();
             }
-            KeyCode::Tab => app.next_pane(),
+            KeyCode::Tab => {
+                if !app.complete_slash_command() {
+                    app.next_pane();
+                }
+            }
             KeyCode::Enter => app.submit_input(),
             KeyCode::Backspace => app.pop_input(),
             KeyCode::Char(c) if modifiers.is_empty() || modifiers == KeyModifiers::SHIFT => {
@@ -2010,13 +2278,20 @@ fn render_session(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
         .take(10)
         .collect::<Vec<_>>()
         .join("\n");
+    let command_suggestions = render_slash_command_suggestions(&app.input);
+    let command_suggestions = if command_suggestions.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{command_suggestions}")
+    };
     let text = format!(
-        "Chat\n> {}\n\n{}\n\nTask Queue\n{}\n\nDiff Preview\n{}\n\nPlan\n{}\n\nReview Loop\n{}\n\nVerify Profile\n{}",
+        "Chat\n> {}{}\n\n{}\n\nTask Queue\n{}\n\nDiff Preview\n{}\n\nPlan\n{}\n\nReview Loop\n{}\n\nVerify Profile\n{}",
         if app.input.is_empty() {
             "Type a task here, then press Enter.".to_string()
         } else {
             app.input.clone()
         },
+        command_suggestions,
         workflow_status,
         queue,
         diff_preview,
@@ -2119,11 +2394,90 @@ fn render_terminal(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
 }
 
 fn render_status(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
+    let tab_hint = if !slash_command_suggestions(&app.input).is_empty() {
+        "Tab complete"
+    } else {
+        "Tab pane"
+    };
     let status = format!(
-        " {} · Tab pane · Enter queue · Esc/q quit · config {} ",
-        app.status, CONFIG_PATH
+        " {} · {} · Enter queue · Esc/q quit · config {} ",
+        app.status, tab_hint, CONFIG_PATH
     );
     f.render_widget(Paragraph::new(status), area);
+}
+
+fn slash_command_prefix(input: &str) -> Option<&str> {
+    let trimmed = input.trim_start();
+    if !trimmed.starts_with('/') || trimmed.chars().any(char::is_whitespace) {
+        return None;
+    }
+    Some(trimmed)
+}
+
+fn slash_command_suggestions(input: &str) -> Vec<&'static SlashCommandHint> {
+    let Some(prefix) = slash_command_prefix(input) else {
+        return Vec::new();
+    };
+    SLASH_COMMAND_HINTS
+        .iter()
+        .filter(|hint| hint.command.starts_with(prefix))
+        .take(6)
+        .collect()
+}
+
+fn render_slash_command_suggestions(input: &str) -> String {
+    let suggestions = slash_command_suggestions(input);
+    if suggestions.is_empty() {
+        return String::new();
+    }
+    let mut lines = vec!["Command Suggestions".to_string()];
+    lines.extend(
+        suggestions
+            .iter()
+            .map(|hint| format!("{}  -  {}", hint.command, hint.detail)),
+    );
+    lines.join("\n")
+}
+
+fn unknown_slash_command_status(command: &str) -> String {
+    if let Some(nearest) = nearest_slash_command(command) {
+        format!(
+            "Unknown slash command: {command}. Did you mean {}? Try /commands or /help.",
+            nearest.command
+        )
+    } else {
+        format!(
+            "Unknown slash command: {command}. Try /commands, /help, /verify, /run, /eval-run, /flow."
+        )
+    }
+}
+
+fn nearest_slash_command(command: &str) -> Option<&'static SlashCommandHint> {
+    SLASH_COMMAND_HINTS
+        .iter()
+        .map(|hint| (edit_distance(command, hint.command), hint))
+        .min_by_key(|(distance, _)| *distance)
+        .and_then(|(distance, hint)| (distance <= 3).then_some(hint))
+}
+
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b_chars = b.chars().collect::<Vec<_>>();
+    let mut costs = (0..=b_chars.len()).collect::<Vec<_>>();
+
+    for (i, a_char) in a.chars().enumerate() {
+        let mut previous_diagonal = costs[0];
+        costs[0] = i + 1;
+        for (j, b_char) in b_chars.iter().enumerate() {
+            let previous_cost = costs[j + 1];
+            let substitution = previous_diagonal + usize::from(a_char != *b_char);
+            let insertion = costs[j] + 1;
+            let deletion = previous_cost + 1;
+            costs[j + 1] = substitution.min(insertion).min(deletion);
+            previous_diagonal = previous_cost;
+        }
+    }
+
+    costs[b_chars.len()]
 }
 
 fn render_command_palette(f: &mut Frame, app: &WorkbenchApp) {
@@ -2157,7 +2511,7 @@ fn render_help(f: &mut Frame) {
     f.render_widget(Clear, area);
     let text = "ArgusCode Help\n\n\
 Ctrl+K  Open command palette\n\
-Tab     Switch pane\n\
+Tab     Switch pane / complete slash command\n\
 Enter   Queue task / run selected command\n\
 ?       Toggle help\n\
 Esc     Close overlay or exit\n\
@@ -2659,6 +3013,65 @@ mod tests {
         assert!(terminal.contains("/fix"), "{terminal}");
         assert!(!terminal.contains("arguscode provider"), "{terminal}");
         assert!(app.status.contains("command guide"), "{}", app.status);
+    }
+
+    #[test]
+    fn session_renders_slash_command_suggestions_while_typing() {
+        let mut app = app();
+        app.input = "/co".into();
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 36)).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+
+        assert!(text.contains("Command Suggestions"), "{text}");
+        assert!(text.contains("/commands"), "{text}");
+        assert!(text.contains("/continue"), "{text}");
+        assert!(text.contains("Tab complete"), "{text}");
+    }
+
+    #[test]
+    fn unknown_slash_command_suggests_nearest_known_command() {
+        let mut app = app();
+
+        for c in "/verfy".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert!(
+            app.status.contains("Unknown slash command: /verfy"),
+            "{}",
+            app.status
+        );
+        assert!(
+            app.status.contains("Did you mean /verify?"),
+            "{}",
+            app.status
+        );
+    }
+
+    #[test]
+    fn tab_completes_first_slash_command_suggestion() {
+        let mut app = app();
+        app.input = "/ver".into();
+        let active_pane = app.active_pane;
+
+        handle_key(&mut app, KeyCode::Tab, KeyModifiers::empty());
+
+        assert_eq!(app.input, "/verify ");
+        assert_eq!(app.active_pane, active_pane);
+        assert!(
+            app.status.contains("Completed slash command"),
+            "{}",
+            app.status
+        );
     }
 
     #[test]
