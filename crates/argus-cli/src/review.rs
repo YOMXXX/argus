@@ -1,3 +1,4 @@
+use crate::workspace_filter::reviewable_status_lines;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -14,10 +15,12 @@ pub struct ReviewDecision {
 }
 
 pub fn load_change_review(root: &Path) -> Result<String> {
-    let status = run_git(root, ["status", "--short"])?;
+    let status = run_git(root, ["status", "--short", "--untracked-files=all"])?;
     let stat = run_git(root, ["diff", "--stat"])?;
     let staged = run_git(root, ["diff", "--cached", "--stat"])?;
-    let status = status.trim();
+    let status = reviewable_status_lines(&status)
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
     let stat = stat.trim();
     let staged = staged.trim();
 
@@ -27,7 +30,12 @@ pub fn load_change_review(root: &Path) -> Result<String> {
     if status.is_empty() {
         lines.push("(clean)".into());
     } else {
-        lines.extend(status.lines().take(18).map(|line| line.to_string()));
+        lines.extend(status.iter().take(18).cloned());
+        lines.push("".into());
+        lines.push("Changed files".into());
+        for line in status.iter().take(18) {
+            lines.push(format_change_file(line));
+        }
     }
     if !stat.is_empty() {
         lines.push("".into());
@@ -46,6 +54,13 @@ pub fn load_change_review(root: &Path) -> Result<String> {
     lines.push("- /rework <task> to queue a follow-up".into());
     lines.push("- /rollback to restore the last checkpoint".into());
     Ok(lines.join("\n"))
+}
+
+fn format_change_file(status_line: &str) -> String {
+    let code = status_line.get(..2).unwrap_or(status_line).trim();
+    let path = status_line.get(3..).unwrap_or(status_line).trim();
+    let code = if code.is_empty() { "modified" } else { code };
+    format!("- {code:<2} {path}")
 }
 
 pub fn record_review_decision(root: &Path, decision: &str, note: &str) -> Result<ReviewDecision> {
@@ -152,7 +167,32 @@ mod tests {
         assert!(review.contains("Change Review"), "{review}");
         assert!(review.contains("Pending changes"), "{review}");
         assert!(review.contains("?? new-file.txt"), "{review}");
+        assert!(review.contains("Changed files"), "{review}");
+        assert!(review.contains("- ?? new-file.txt"), "{review}");
         assert!(review.contains("Next actions"), "{review}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_change_review_ignores_argus_runtime_metadata() {
+        let dir = temp_dir("runtime");
+        std::fs::create_dir_all(dir.join(".argus/cockpit")).unwrap();
+        std::fs::create_dir_all(dir.join(".argus/tasks")).unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::fs::write(dir.join(".argus/cockpit/events.jsonl"), "{}\n").unwrap();
+        std::fs::write(dir.join(".argus/tasks/queue.jsonl"), "{}\n").unwrap();
+        std::fs::write(dir.join("real-change.txt"), "hello\n").unwrap();
+
+        let review = super::load_change_review(&dir).unwrap();
+
+        assert!(review.contains("real-change.txt"), "{review}");
+        assert!(!review.contains(".argus/cockpit"), "{review}");
+        assert!(!review.contains(".argus/tasks"), "{review}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -1,6 +1,7 @@
 use crate::review::{list_review_decisions, ReviewDecision};
 use crate::sessions::{list_sessions, SessionRecord};
 use crate::tasks::{list_tasks, TaskRecord};
+use crate::workspace_filter::reviewable_status_lines;
 use anyhow::Result;
 use std::path::Path;
 use std::process::Command;
@@ -220,28 +221,6 @@ fn compact(value: &str, max_chars: usize) -> String {
         .collect::<String>();
     out.push_str("...");
     out
-}
-
-fn reviewable_status_lines(status: &str) -> impl Iterator<Item = &str> {
-    status
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .filter(|line| !is_argus_runtime_status_line(line))
-}
-
-fn is_argus_runtime_status_line(line: &str) -> bool {
-    [
-        ".argus/tasks/",
-        ".argus/sessions/",
-        ".argus/reviews/",
-        ".argus/cockpit/",
-        ".argus/checkpoints/",
-        ".argus/eval/",
-        ".argus/eval-runs/",
-    ]
-    .iter()
-    .any(|runtime_path| line.contains(runtime_path))
 }
 
 fn run_git<const N: usize>(root: &Path, args: [&str; N]) -> Result<String> {

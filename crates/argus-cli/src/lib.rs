@@ -17,3 +17,4 @@ pub mod tui;
 pub mod verify;
 pub mod workbench;
 pub mod workflow;
+pub mod workspace_filter;

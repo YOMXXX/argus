@@ -27,6 +27,7 @@ Make edits reviewable without leaving the TUI.
 - File-level changed path list with staged/unstaged status.
 - Focused patch summary and review actions.
 - Accept/rework/rollback tied to checkpoint ids and review decisions.
+- First slice: `/review` and `/patch` show reviewable changed files while filtering `.argus/` runtime metadata.
 
 ## Block 3: Agent Compatibility Layer
 

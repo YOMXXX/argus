@@ -369,7 +369,7 @@ impl WorkbenchApp {
             }
             "/diff" => self.refresh_diff_preview(),
             "/flow" => self.refresh_workflow_status(),
-            "/review" => self.refresh_change_review(),
+            "/review" | "/patch" => self.refresh_change_review(),
             "/accept" => self.accept_change_review(&args.join(" ")),
             "/rework" => self.queue_rework_task(&args.join(" ")),
             "/map" => self.refresh_repo_map(),
@@ -1676,6 +1676,7 @@ Slash commands\n\
 /flow    Refresh workflow status\n\
 /diff    Refresh diff preview\n\
 /review  Refresh change review\n\
+/patch   Refresh patch review\n\
 /accept  Record accepted review decision\n\
 /rework  Queue a review follow-up task\n\
 /history Open session history\n\
@@ -2734,6 +2735,40 @@ mod tests {
         );
         assert!(
             app.change_review.contains("new-file.txt"),
+            "{}",
+            app.change_review
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_patch_refreshes_change_review_alias() {
+        let dir = temp_dir("slash-patch");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let mut app = app_with_root(dir.clone());
+        app.change_review = "stale".into();
+        std::fs::write(dir.join("patch.txt"), "patch\n").unwrap();
+
+        for c in "/patch".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert!(app.task_queue.is_empty(), "{:?}", app.task_queue);
+        assert_eq!(app.active_pane, WorkbenchPane::Session);
+        assert!(
+            app.change_review.contains("Changed files"),
+            "{}",
+            app.change_review
+        );
+        assert!(
+            app.change_review.contains("patch.txt"),
             "{}",
             app.change_review
         );
