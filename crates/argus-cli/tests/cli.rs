@@ -469,6 +469,11 @@ fn arguscode_resume_run_executes_latest_task_and_updates_status() {
         "show: {show_out}"
     );
 
+    let cockpit = std::fs::read_to_string(dir.join(".argus/cockpit/events.jsonl")).unwrap();
+    assert!(cockpit.contains("\"phase\":\"harness\""), "{cockpit}");
+    assert!(cockpit.contains("running through argus run"), "{cockpit}");
+    assert!(cockpit.contains("completed with status done"), "{cockpit}");
+
     let _ = std::fs::remove_dir_all(&dir);
 }
 

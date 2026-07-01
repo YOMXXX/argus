@@ -1,3 +1,4 @@
+use crate::cockpit::append_cockpit_event;
 use crate::config::ArgusCodeConfig;
 use crate::sessions::append_session;
 use crate::tasks::{update_task_status, TaskRecord};
@@ -19,6 +20,12 @@ pub fn run_task_through_harness(root: &Path, record: &TaskRecord) -> Result<Harn
     let (_, config) = crate::workbench::ensure_config(root)?;
     update_task_status(root, &record.id, "running")?;
     let trace = PathBuf::from(".argus/tasks").join(format!("{}.trace.jsonl", record.id));
+    append_cockpit_event(
+        root,
+        "harness",
+        &format!("task {} running through argus run", record.id),
+        "wait for model, tools, and verification gate",
+    )?;
 
     let mut command = build_argus_run_command(&argus_binary_path()?, root, &config, record, &trace);
 
@@ -29,6 +36,12 @@ pub fn run_task_through_harness(root: &Path, record: &TaskRecord) -> Result<Harn
     if output.status.success() {
         update_task_status(root, &record.id, "done")?;
         append_session(root, &record.id, &record.text, "done", trace.clone())?;
+        append_cockpit_event(
+            root,
+            "harness",
+            &format!("task {} completed with status done", record.id),
+            "/review, /verify, or /accept <note>",
+        )?;
         Ok(HarnessRunOutput {
             task_id: record.id.clone(),
             task_text: record.text.clone(),
@@ -40,6 +53,12 @@ pub fn run_task_through_harness(root: &Path, record: &TaskRecord) -> Result<Harn
     } else {
         update_task_status(root, &record.id, "failed")?;
         append_session(root, &record.id, &record.text, "failed", trace)?;
+        append_cockpit_event(
+            root,
+            "harness",
+            &format!("task {} completed with status failed", record.id),
+            "/retry <task-id>, /rework <task>, or inspect trace",
+        )?;
         anyhow::bail!(
             "Argus harness failed with {}\n--- stdout ---\n{}\n--- stderr ---\n{}",
             output.status,
