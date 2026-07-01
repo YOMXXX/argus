@@ -138,6 +138,7 @@ pub struct WorkbenchApp {
     pub eval_dashboard: String,
     pub memory_preview: String,
     pub cockpit_journal: String,
+    pub progress_summary: String,
     pub terminal_log: Vec<String>,
     pub latest_trace_path: Option<PathBuf>,
     pub input: String,
@@ -222,7 +223,7 @@ impl WorkbenchApp {
             .session_history
             .last()
             .map(|session| session.trace.clone());
-        Self {
+        let mut app = Self {
             profile,
             config,
             active_pane: WorkbenchPane::Session,
@@ -239,13 +240,16 @@ impl WorkbenchApp {
             eval_dashboard: data.eval_dashboard,
             memory_preview: data.memory_preview,
             cockpit_journal: data.cockpit_journal,
+            progress_summary: String::new(),
             terminal_log: Vec::new(),
             latest_trace_path,
             input: String::new(),
             status: "Ready. Type a task, Tab switches panes, Ctrl+K opens command palette.".into(),
             background_run_seen: None,
             background_output_seen: 0,
-        }
+        };
+        app.refresh_progress_summary_silent();
+        app
     }
 
     pub fn next_pane(&mut self) {
@@ -1039,6 +1043,7 @@ impl WorkbenchApp {
         self.refresh_cockpit_journal_silent();
         self.refresh_background_output_silent();
         let Ok(Some(run)) = load_background_run(&self.profile.root) else {
+            self.refresh_progress_summary_silent();
             return;
         };
         self.refresh_background_trace_silent(&run);
@@ -1068,6 +1073,16 @@ impl WorkbenchApp {
             }
             _ => {}
         }
+        self.refresh_progress_summary_silent();
+    }
+
+    fn refresh_progress_summary_silent(&mut self) {
+        self.progress_summary = build_progress_summary(
+            &self.status,
+            &self.trace_preview,
+            &self.cockpit_journal,
+            &self.terminal_log,
+        );
     }
 
     fn refresh_background_trace_silent(&mut self, run: &BackgroundRun) {
@@ -1621,6 +1636,78 @@ fn background_run_marker(run: &BackgroundRun) -> String {
     format!("{}:{}:{}", run.task_id, run.status, run.updated_ms)
 }
 
+fn build_progress_summary(
+    status: &str,
+    trace: &TracePreview,
+    cockpit_journal: &str,
+    terminal_log: &[String],
+) -> String {
+    let mut lines = vec![
+        "Progress Summary".to_string(),
+        format!("Status: {}", compact_progress_line(status, 96)),
+    ];
+    if let Some(trace_line) = trace.lines.last() {
+        lines.push(format!("Trace: {}", compact_progress_line(trace_line, 112)));
+    } else {
+        lines.push(format!(
+            "Trace: {}",
+            compact_progress_line(&trace.headline, 112)
+        ));
+    }
+    if let Some(cockpit_line) = cockpit_journal.lines().rev().find(|line| {
+        let line = line.trim();
+        !line.is_empty() && line != "Execution Cockpit" && !line.starts_with("next:")
+    }) {
+        lines.push(format!(
+            "Cockpit: {}",
+            compact_progress_line(cockpit_line, 112)
+        ));
+    }
+    if let Some(output_line) = terminal_log
+        .iter()
+        .rev()
+        .flat_map(|entry| entry.lines().rev())
+        .find(|line| !line.trim().is_empty())
+    {
+        lines.push(format!(
+            "Output: {}",
+            compact_progress_line(output_line, 112)
+        ));
+    }
+    lines.join("\n")
+}
+
+fn render_progress_summary_compact(app: &WorkbenchApp) -> String {
+    let trace = app
+        .trace_preview
+        .lines
+        .last()
+        .map(|line| compact_progress_line(line, 64))
+        .unwrap_or_else(|| compact_progress_line(&app.trace_preview.headline, 64));
+    format!(
+        "Progress Summary\nStatus: {} | Trace: {trace}",
+        compact_progress_line(&app.status, 72)
+    )
+}
+
+fn compact_progress_line(value: &str, max_chars: usize) -> String {
+    let normalized = value
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if normalized.chars().count() <= max_chars {
+        return normalized;
+    }
+    let mut out = normalized
+        .chars()
+        .take(max_chars.saturating_sub(3))
+        .collect::<String>();
+    out.push_str("...");
+    out
+}
+
 pub fn handle_key(app: &mut WorkbenchApp, code: KeyCode, modifiers: KeyModifiers) -> bool {
     match app.mode {
         WorkbenchMode::Help => match code {
@@ -1975,7 +2062,8 @@ fn render_terminal(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
         .take(3)
         .collect::<Vec<_>>()
         .join("\n");
-    let commands = format!("{cockpit}\n\nOutput\n{output}");
+    let progress = render_progress_summary_compact(app);
+    let commands = format!("{progress}\n\nOutput\n{output}\n\n{cockpit}");
     f.render_widget(
         Paragraph::new(commands)
             .block(panel_block(
@@ -2255,6 +2343,84 @@ mod tests {
         assert!(text.contains("task task-1 done"), "{text}");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn progress_summary_combines_trace_cockpit_and_output() {
+        let mut app = app();
+        app.status = "Background run active: task-1".into();
+        app.trace_preview = TracePreview {
+            target: ".argus/tasks/task-1.trace.jsonl".into(),
+            headline: "3 events".into(),
+            lines: vec![
+                "[  0] TASK     implement live progress".into(),
+                "[  1] MODEL <- deepseek-reasoner (10+20 tokens): editing".into(),
+                "[  2] TOOL ->  shell({\"cmd\":\"cargo test\"})".into(),
+            ],
+        };
+        app.cockpit_journal =
+            "Execution Cockpit\n[harness] task task-1 running\nnext: wait for verification".into();
+        app.terminal_log = vec![
+            "[stdout] compiling argus".into(),
+            "[stderr] warning: retrying".into(),
+        ];
+
+        app.refresh_progress_summary_silent();
+
+        assert!(
+            app.progress_summary.contains("Progress Summary"),
+            "{}",
+            app.progress_summary
+        );
+        assert!(
+            app.progress_summary.contains("Background run active"),
+            "{}",
+            app.progress_summary
+        );
+        assert!(
+            app.progress_summary.contains("Trace: [  2] TOOL"),
+            "{}",
+            app.progress_summary
+        );
+        assert!(
+            app.progress_summary
+                .contains("Cockpit: [harness] task task-1 running"),
+            "{}",
+            app.progress_summary
+        );
+        assert!(
+            app.progress_summary
+                .contains("Output: [stderr] warning: retrying"),
+            "{}",
+            app.progress_summary
+        );
+    }
+
+    #[test]
+    fn terminal_renders_progress_summary_before_output() {
+        let mut app = app();
+        app.status = "running".into();
+        app.trace_preview = TracePreview {
+            target: ".argus/tasks/task-1.trace.jsonl".into(),
+            headline: "2 events".into(),
+            lines: vec!["[  1] TOOL ->  shell({\"cmd\":\"cargo test\"})".into()],
+        };
+        app.terminal_log = vec!["[stdout] compiling".into()];
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 34)).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+
+        assert!(text.contains("Progress Summary"), "{text}");
+        assert!(text.contains("Trace: [  1] TOOL"), "{text}");
+        assert!(text.contains("Output"), "{text}");
+        assert!(text.contains("[stdout] compiling"), "{text}");
     }
 
     #[test]
