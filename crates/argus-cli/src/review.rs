@@ -54,6 +54,15 @@ pub fn load_change_review(root: &Path) -> Result<String> {
             lines.push("Risk Hints".into());
             lines.extend(risk_hints);
         }
+        let hunks = patch_hunks(&diff, "unstaged")
+            .into_iter()
+            .chain(patch_hunks(&staged_diff, "staged"))
+            .collect::<Vec<_>>();
+        if !hunks.is_empty() {
+            lines.push("".into());
+            lines.push("Patch Hunks".into());
+            lines.extend(render_patch_hunks(&hunks));
+        }
     }
     if !stat.is_empty() {
         lines.push("".into());
@@ -78,6 +87,15 @@ pub fn load_change_review(root: &Path) -> Result<String> {
 struct PatchSummary {
     files: usize,
     hunks: usize,
+    insertions: usize,
+    deletions: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PatchHunk {
+    stage: String,
+    path: String,
+    header: String,
     insertions: usize,
     deletions: usize,
 }
@@ -107,6 +125,85 @@ fn render_patch_summary(summary: &PatchSummary) -> Vec<String> {
         format!("- insertions: {}", summary.insertions),
         format!("- deletions: {}", summary.deletions),
     ]
+}
+
+fn render_patch_hunks(hunks: &[PatchHunk]) -> Vec<String> {
+    const MAX_RENDERED_HUNKS: usize = 12;
+    let mut lines = hunks
+        .iter()
+        .take(MAX_RENDERED_HUNKS)
+        .map(|hunk| {
+            format!(
+                "- {} {} {} (+{} -{})",
+                hunk.stage, hunk.path, hunk.header, hunk.insertions, hunk.deletions
+            )
+        })
+        .collect::<Vec<_>>();
+    if hunks.len() > MAX_RENDERED_HUNKS {
+        lines.push(format!(
+            "- ... {} more hunks not shown",
+            hunks.len() - MAX_RENDERED_HUNKS
+        ));
+    }
+    lines
+}
+
+fn patch_hunks(diff: &str, stage: &str) -> Vec<PatchHunk> {
+    let mut hunks = Vec::new();
+    let mut current_path = String::new();
+    let mut current_hunk: Option<PatchHunk> = None;
+
+    for line in diff.lines() {
+        if let Some(path) = parse_diff_file_path(line) {
+            push_hunk(&mut hunks, current_hunk.take());
+            current_path = path.to_string();
+            continue;
+        }
+        if line.starts_with("@@ ") {
+            push_hunk(&mut hunks, current_hunk.take());
+            if !current_path.is_empty() && !is_argus_runtime_status_line(&current_path) {
+                current_hunk = Some(PatchHunk {
+                    stage: stage.to_string(),
+                    path: current_path.clone(),
+                    header: compact_hunk_header(line),
+                    insertions: 0,
+                    deletions: 0,
+                });
+            }
+            continue;
+        }
+        if let Some(hunk) = current_hunk.as_mut() {
+            if line.starts_with('+') && !line.starts_with("+++") {
+                hunk.insertions += 1;
+            } else if line.starts_with('-') && !line.starts_with("---") {
+                hunk.deletions += 1;
+            }
+        }
+    }
+    push_hunk(&mut hunks, current_hunk);
+    hunks
+}
+
+fn push_hunk(hunks: &mut Vec<PatchHunk>, hunk: Option<PatchHunk>) {
+    if let Some(hunk) = hunk {
+        hunks.push(hunk);
+    }
+}
+
+fn parse_diff_file_path(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix("diff --git a/")?;
+    let (_, path) = rest.rsplit_once(" b/")?;
+    Some(path)
+}
+
+fn compact_hunk_header(line: &str) -> String {
+    let mut parts = line.split("@@");
+    let _ = parts.next();
+    if let Some(range) = parts.next() {
+        format!("@@{range}@@")
+    } else {
+        line.to_string()
+    }
 }
 
 fn review_risk_hints(
@@ -450,6 +547,97 @@ mod tests {
         assert!(review.contains("hunks: 1"), "{review}");
         assert!(review.contains("insertions: 2"), "{review}");
         assert!(review.contains("deletions: 0"), "{review}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_change_review_includes_patch_hunk_preview_for_tracked_diff() {
+        let dir = temp_dir("hunk-preview");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::fs::write(dir.join("tracked.txt"), "one\ntwo\nthree\nfour\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "tracked.txt"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "user.name=Argus Test",
+                "commit",
+                "-m",
+                "seed",
+            ])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::fs::write(dir.join("tracked.txt"), "one\nTWO\nthree\nFOUR\n").unwrap();
+
+        let review = super::load_change_review(&dir).unwrap();
+
+        assert!(review.contains("Patch Hunks"), "{review}");
+        assert!(
+            review.contains("- unstaged tracked.txt @@ -2 +2 @@ (+1 -1)"),
+            "{review}"
+        );
+        assert!(
+            review.contains("- unstaged tracked.txt @@ -4 +4 @@ (+1 -1)"),
+            "{review}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_change_review_labels_staged_patch_hunks() {
+        let dir = temp_dir("staged-hunk-preview");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::fs::write(dir.join("tracked.txt"), "one\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "tracked.txt"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "user.name=Argus Test",
+                "commit",
+                "-m",
+                "seed",
+            ])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::fs::write(dir.join("tracked.txt"), "one\ntwo\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "tracked.txt"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+
+        let review = super::load_change_review(&dir).unwrap();
+
+        assert!(review.contains("Patch Hunks"), "{review}");
+        assert!(
+            review.contains("- staged tracked.txt @@ -1,0 +2 @@ (+1 -0)"),
+            "{review}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
