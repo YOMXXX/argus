@@ -6,6 +6,7 @@ use crate::eval_dashboard::load_eval_dashboard;
 use crate::eval_runner::{run_eval_suite, EvalRunOutput};
 use crate::harness::{run_task_through_harness, HarnessRunOutput};
 use crate::memory::{append_lesson, load_memory_preview};
+use crate::plans::{complete_current_step, create_plan, load_plan_status, queue_next_step};
 use crate::project::{detect_project, init_project, ProjectProfile};
 use crate::repo_map::load_repo_map;
 use crate::review::{load_change_review, record_review_decision};
@@ -117,6 +118,7 @@ pub struct WorkbenchApp {
     pub diff_preview: String,
     pub change_review: String,
     pub workflow_status: String,
+    pub plan_status: String,
     pub trace_preview: TracePreview,
     pub repo_map: String,
     pub eval_dashboard: String,
@@ -134,6 +136,7 @@ struct WorkbenchLoadedData {
     diff_preview: String,
     change_review: String,
     workflow_status: String,
+    plan_status: String,
     trace_preview: TracePreview,
     repo_map: String,
     eval_dashboard: String,
@@ -152,6 +155,7 @@ impl WorkbenchApp {
                 diff_preview: "(not loaded)".into(),
                 change_review: "(not loaded)".into(),
                 workflow_status: "(not loaded)".into(),
+                plan_status: "(not loaded)".into(),
                 trace_preview: TracePreview::empty(),
                 repo_map: "(not loaded)".into(),
                 eval_dashboard: "(not loaded)".into(),
@@ -167,6 +171,7 @@ impl WorkbenchApp {
         let diff_preview = load_diff_preview(&profile.root)?;
         let change_review = load_change_review(&profile.root)?;
         let workflow_status = load_workflow_status(&profile.root, &config.verify.commands)?;
+        let plan_status = load_plan_status(&profile.root)?;
         let latest_trace_path = session_history.last().map(|session| session.trace.clone());
         let trace_preview = load_trace_preview(&profile.root, latest_trace_path.as_deref());
         let repo_map = load_repo_map(&profile.root, &profile, &config)?;
@@ -182,6 +187,7 @@ impl WorkbenchApp {
                 diff_preview,
                 change_review,
                 workflow_status,
+                plan_status,
                 trace_preview,
                 repo_map,
                 eval_dashboard,
@@ -211,6 +217,7 @@ impl WorkbenchApp {
             diff_preview: data.diff_preview,
             change_review: data.change_review,
             workflow_status: data.workflow_status,
+            plan_status: data.plan_status,
             trace_preview: data.trace_preview,
             repo_map: data.repo_map,
             eval_dashboard: data.eval_dashboard,
@@ -355,6 +362,9 @@ impl WorkbenchApp {
             }
             "/diff" => self.refresh_diff_preview(),
             "/flow" | "/status" => self.refresh_workflow_status(),
+            "/plan" => self.create_work_plan(&args.join(" ")),
+            "/next" => self.queue_next_plan_step(),
+            "/done" => self.complete_plan_step(&args.join(" ")),
             "/review" | "/patch" => self.refresh_change_review(),
             "/accept" => self.accept_change_review(&args.join(" ")),
             "/rework" => self.queue_rework_task(&args.join(" ")),
@@ -456,6 +466,64 @@ impl WorkbenchApp {
             }
             Err(err) => {
                 self.status = format!("Could not queue task: {err}");
+            }
+        }
+    }
+
+    fn create_work_plan(&mut self, goal: &str) {
+        self.active_pane = WorkbenchPane::Session;
+        match create_plan(&self.profile.root, goal) {
+            Ok(plan) => {
+                self.plan_status = load_plan_status(&self.profile.root)
+                    .unwrap_or_else(|err| format!("Could not load plan: {err}"));
+                self.record_cockpit_event("plan", &format!("created plan: {}", plan.goal), "/next");
+                self.status = format!("Plan created: {}", plan.goal);
+            }
+            Err(err) => {
+                self.status = format!("Could not create plan: {err}");
+            }
+        }
+    }
+
+    fn queue_next_plan_step(&mut self) {
+        match queue_next_step(&self.profile.root) {
+            Ok(Some(record)) => {
+                self.task_queue.push(record.clone());
+                self.plan_status = load_plan_status(&self.profile.root)
+                    .unwrap_or_else(|err| format!("Could not load plan: {err}"));
+                self.refresh_workflow_status_silent();
+                self.record_cockpit_event(
+                    "plan",
+                    &format!("queued next step: {}", record.id),
+                    "/run or /done <evidence>",
+                );
+                self.status = format!("Plan step queued: {}", record.id);
+            }
+            Ok(None) => {
+                self.plan_status = load_plan_status(&self.profile.root)
+                    .unwrap_or_else(|err| format!("Could not load plan: {err}"));
+                self.status = "No pending plan step. Use /plan <goal> or /done <evidence>.".into();
+            }
+            Err(err) => {
+                self.status = format!("Could not queue plan step: {err}");
+            }
+        }
+    }
+
+    fn complete_plan_step(&mut self, evidence: &str) {
+        match complete_current_step(&self.profile.root, evidence) {
+            Ok(plan) => {
+                self.plan_status = load_plan_status(&self.profile.root)
+                    .unwrap_or_else(|err| format!("Could not load plan: {err}"));
+                self.record_cockpit_event(
+                    "plan",
+                    &format!("completed plan step for: {}", plan.goal),
+                    "/next or /plan <goal>",
+                );
+                self.status = "Plan step completed.".into();
+            }
+            Err(err) => {
+                self.status = format!("Could not complete plan step: {err}");
             }
         }
     }
@@ -1499,7 +1567,7 @@ fn render_session(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
             .iter()
             .rev()
             .take(3)
-            .map(|task| format!("[{}] {}  {}", task.status, task.id, task.text))
+            .map(|task| format!("[{}] {}", task.status, task.text))
             .collect::<Vec<_>>()
             .join("\n")
     };
@@ -1515,6 +1583,12 @@ fn render_session(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
         .take(7)
         .collect::<Vec<_>>()
         .join("\n");
+    let plan_status = app
+        .plan_status
+        .lines()
+        .take(2)
+        .collect::<Vec<_>>()
+        .join("\n");
     let diff_preview = app
         .diff_preview
         .lines()
@@ -1522,7 +1596,7 @@ fn render_session(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
         .collect::<Vec<_>>()
         .join("\n");
     let text = format!(
-        "Chat\n> {}\n\n{}\n\nTask Queue\n{}\n\nDiff Preview\n{}\n\nReview Loop\n{}\n\nPlan: understand -> edit -> verify -> review\n\nVerify Profile\n{}",
+        "Chat\n> {}\n\n{}\n\nTask Queue\n{}\n\nDiff Preview\n{}\n\nPlan\n{}\n\nReview Loop\n{}\n\nVerify Profile\n{}",
         if app.input.is_empty() {
             "Type a task here, then press Enter.".to_string()
         } else {
@@ -1531,6 +1605,7 @@ fn render_session(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
         workflow_status,
         queue,
         diff_preview,
+        plan_status,
         review_loop,
         verify
     );
@@ -1690,6 +1765,9 @@ Slash commands\n\
 /retry   Requeue a task by id\n\
 /flow    Refresh workflow status\n\
 /status  Refresh workflow status\n\
+/plan    Create a durable work plan\n\
+/next    Queue the next plan step\n\
+/done    Complete the current plan step with evidence\n\
 /diff    Refresh diff preview\n\
 /review  Refresh change review\n\
 /patch   Refresh patch review\n\
@@ -2212,6 +2290,54 @@ mod tests {
         let tasks = list_tasks(&dir).unwrap();
         assert_eq!(tasks.len(), 1, "{tasks:?}");
         assert_eq!(tasks[0].text, "fix the parser");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_plan_next_and_done_drive_planning_engine() {
+        let dir = temp_dir("slash-plan");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = app_with_root(dir.clone());
+
+        for c in "/plan ship planning engine".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+        assert!(
+            app.plan_status.contains("ship planning engine"),
+            "{}",
+            app.plan_status
+        );
+        assert!(app.status.contains("Plan created"), "{}", app.status);
+
+        for c in "/next".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+        assert_eq!(app.task_queue.len(), 1, "{:?}", app.task_queue);
+        assert!(app.task_queue[0].text.contains("ship planning engine"));
+        assert!(
+            app.plan_status.contains("[queued] step-1"),
+            "{}",
+            app.plan_status
+        );
+
+        for c in "/done cargo test passed".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+        assert!(app.status.contains("Plan step completed"), "{}", app.status);
+        assert!(
+            app.plan_status.contains("[done] step-1"),
+            "{}",
+            app.plan_status
+        );
+        assert!(
+            app.plan_status.contains("cargo test passed"),
+            "{}",
+            app.plan_status
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

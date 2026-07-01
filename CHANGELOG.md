@@ -29,6 +29,7 @@
 - Added Workbench workflow status and an Execution Cockpit journal for queue, run, verify, review, rework, checkpoint, route, and eval events.
 - Added patch-review friendly Workbench review output that filters Argus runtime metadata and lists changed files.
 - Added agent-compatibility aliases, combined rule-file import, and `arguscode health` compatibility reporting.
+- Added a durable Workbench planning engine with `/plan`, `/next`, and `/done` backed by `.argus/plans/current.json`.
 - Updated release packaging and installer support so archives install both `argus` and `arguscode`.
 
 ## 0.1.1 - 2026-06-30

@@ -45,6 +45,7 @@ Turn broad goals into executable work plans.
 - `/plan <goal>` creates a durable plan with phases and acceptance gates.
 - `/next` queues the next unblocked task.
 - `/done` records evidence and advances the plan.
+- First slice: durable `.argus/plans/current.json` plans plus Workbench `/plan`, `/next`, and `/done` commands.
 
 ## Block 5: Quality Gate And Self-Repair
 

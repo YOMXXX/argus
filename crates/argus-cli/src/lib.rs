@@ -7,6 +7,7 @@ pub mod eval_dashboard;
 pub mod eval_runner;
 pub mod harness;
 pub mod memory;
+pub mod plans;
 pub mod project;
 pub mod repo_map;
 pub mod review;
