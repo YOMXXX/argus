@@ -4659,6 +4659,7 @@ mod tests {
             if state
                 .as_ref()
                 .is_some_and(|state| state.status == "canceled")
+                && app.status.contains("Background run canceled")
             {
                 break;
             }
