@@ -13,6 +13,119 @@ pub struct LoadedRules {
     pub prompt: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AgentCommandMapping {
+    pub source: &'static str,
+    pub familiar: &'static str,
+    pub arguscode: &'static str,
+    pub tui: &'static str,
+    pub purpose: &'static str,
+}
+
+impl AgentCommandMapping {
+    fn matches_query(&self, query: &str) -> bool {
+        self.source.to_ascii_lowercase().contains(query)
+            || self.familiar.to_ascii_lowercase().contains(query)
+            || self.arguscode.to_ascii_lowercase().contains(query)
+            || self.tui.to_ascii_lowercase().contains(query)
+            || self.purpose.to_ascii_lowercase().contains(query)
+    }
+}
+
+pub const AGENT_COMMAND_MAPPINGS: &[AgentCommandMapping] = &[
+    AgentCommandMapping {
+        source: "Claude Code",
+        familiar: "claude",
+        arguscode: "arguscode",
+        tui: "arguscode",
+        purpose: "Open the ArgusCode TUI workbench",
+    },
+    AgentCommandMapping {
+        source: "Claude Code",
+        familiar: "claude \"fix login\"",
+        arguscode: "arguscode chat \"fix login\"",
+        tui: "/ask fix login",
+        purpose: "Queue a conversational coding task and enter the workbench",
+    },
+    AgentCommandMapping {
+        source: "Codex CLI",
+        familiar: "codex",
+        arguscode: "arguscode",
+        tui: "arguscode",
+        purpose: "Open the ArgusCode TUI workbench",
+    },
+    AgentCommandMapping {
+        source: "Codex CLI",
+        familiar: "codex exec \"implement auth\"",
+        arguscode: "arguscode task \"implement auth\"",
+        tui: "/code implement auth",
+        purpose: "Queue a coding task without leaving the current repo",
+    },
+    AgentCommandMapping {
+        source: "KimiCode",
+        familiar: "kimicode fix \"parser bug\"",
+        arguscode: "arguscode fix \"parser bug\"",
+        tui: "/fix parser bug",
+        purpose: "Queue a focused fix task",
+    },
+    AgentCommandMapping {
+        source: "MiMoCode",
+        familiar: "mimocode edit \"settings UI\"",
+        arguscode: "arguscode edit \"settings UI\"",
+        tui: "/edit settings UI",
+        purpose: "Queue an edit task using familiar agent wording",
+    },
+    AgentCommandMapping {
+        source: "Any agent",
+        familiar: "implement \"feature\"",
+        arguscode: "arguscode implement \"feature\"",
+        tui: "/implement feature",
+        purpose: "Queue an implementation task",
+    },
+    AgentCommandMapping {
+        source: "Any agent",
+        familiar: "continue",
+        arguscode: "arguscode resume --run",
+        tui: "/continue",
+        purpose: "Resume the latest queued task through the harness",
+    },
+    AgentCommandMapping {
+        source: "Any agent",
+        familiar: "check / test",
+        arguscode: "arguscode verify",
+        tui: "/check",
+        purpose: "Run the configured verification gate",
+    },
+    AgentCommandMapping {
+        source: "Any agent",
+        familiar: "doctor / health",
+        arguscode: "arguscode doctor",
+        tui: "/doctor",
+        purpose: "Show project and agent compatibility signals",
+    },
+    AgentCommandMapping {
+        source: "Any agent",
+        familiar: "logs / output",
+        arguscode: "arguscode history",
+        tui: "/logs",
+        purpose: "Inspect terminal output and recorded sessions",
+    },
+    AgentCommandMapping {
+        source: "Any agent",
+        familiar: "model / provider",
+        arguscode: "arguscode provider",
+        tui: "/provider",
+        purpose: "Show or update the active model/provider profile",
+    },
+    AgentCommandMapping {
+        source: "ArgusCode",
+        familiar: "commands / cheatsheet",
+        arguscode: "arguscode commands [query]",
+        tui: "/commands [query]",
+        purpose: "Search this compatibility command guide",
+    },
+];
+
 pub fn detect_rule_files(root: &Path) -> Vec<PathBuf> {
     detect_agent_rule_files(root)
         .into_iter()
@@ -88,6 +201,43 @@ pub fn render_agent_compatibility(root: &Path) -> String {
     lines.join("\n")
 }
 
+pub fn render_agent_command_catalog(query: Option<&str>) -> String {
+    let query = query.map(str::trim).filter(|query| !query.is_empty());
+    let needle = query.map(str::to_ascii_lowercase);
+    let mut lines = vec![
+        "Agent command guide".to_string(),
+        "Use familiar Claude Code, Codex CLI, KimiCode, MiMoCode, and general agent habits in ArgusCode.".to_string(),
+        "CLI: arguscode commands [query] | TUI: /commands [query]".to_string(),
+    ];
+    if let Some(query) = query {
+        lines.push(format!("Filter: {query}"));
+    }
+    lines.push(String::new());
+
+    let mut matches = 0usize;
+    for mapping in AGENT_COMMAND_MAPPINGS {
+        if let Some(needle) = needle.as_deref() {
+            if !mapping.matches_query(needle) {
+                continue;
+            }
+        }
+        matches += 1;
+        lines.push(format!(
+            "- {} | familiar: {} | arguscode: {} | tui: {} | {}",
+            mapping.source, mapping.familiar, mapping.arguscode, mapping.tui, mapping.purpose
+        ));
+    }
+
+    if matches == 0 {
+        lines.push(format!(
+            "No compatible command matched \"{}\".",
+            query.unwrap_or_default()
+        ));
+    }
+
+    lines.join("\n")
+}
+
 fn push_if_file(root: &Path, rel: &str, agent: &'static str, files: &mut Vec<AgentRuleFile>) {
     if root.join(rel).is_file() {
         files.push(AgentRuleFile {
@@ -125,4 +275,41 @@ fn detect_config_signals(root: &Path) -> Vec<String> {
         }
     }
     signals
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_catalog_renders_migration_entries() {
+        let catalog = render_agent_command_catalog(None);
+
+        assert!(catalog.contains("Agent command guide"), "{catalog}");
+        assert!(catalog.contains("Claude Code"), "{catalog}");
+        assert!(catalog.contains("Codex CLI"), "{catalog}");
+        assert!(catalog.contains("KimiCode"), "{catalog}");
+        assert!(catalog.contains("arguscode fix"), "{catalog}");
+        assert!(catalog.contains("/commands [query]"), "{catalog}");
+    }
+
+    #[test]
+    fn command_catalog_filters_by_query() {
+        let catalog = render_agent_command_catalog(Some("fix"));
+
+        assert!(catalog.contains("Filter: fix"), "{catalog}");
+        assert!(catalog.contains("arguscode fix"), "{catalog}");
+        assert!(catalog.contains("/fix"), "{catalog}");
+        assert!(!catalog.contains("arguscode provider"), "{catalog}");
+    }
+
+    #[test]
+    fn command_catalog_reports_empty_filter_results() {
+        let catalog = render_agent_command_catalog(Some("no-such-agent-command"));
+
+        assert!(
+            catalog.contains("No compatible command matched"),
+            "{catalog}"
+        );
+    }
 }

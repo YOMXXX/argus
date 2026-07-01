@@ -1,5 +1,5 @@
 use anyhow::Result;
-use argus_cli::compatibility::render_agent_compatibility;
+use argus_cli::compatibility::{render_agent_command_catalog, render_agent_compatibility};
 use argus_cli::harness::{run_task_through_harness, HarnessRunOutput};
 use argus_cli::launch::{load_launch_checklist, render_launch_checklist};
 use argus_cli::project::{detect_project, init_project, init_report_text};
@@ -76,6 +76,12 @@ enum Commands {
     /// Check local project readiness for ArgusCode.
     #[command(alias = "health", alias = "compat")]
     Doctor,
+    /// Show familiar agent command mappings and migration cheatsheet.
+    #[command(name = "commands", alias = "cheatsheet", alias = "migrate")]
+    CommandGuide {
+        /// Optional command, tool, or agent name to filter the guide.
+        query: Option<String>,
+    },
     /// Print launch readiness checks for docs, CI, installer, demo, and benchmarks.
     #[command(alias = "readiness")]
     Launch,
@@ -136,6 +142,7 @@ async fn main() -> Result<()> {
         Commands::Provider { command } => provider_command(&cwd, command),
         Commands::History => history(&cwd),
         Commands::Doctor => doctor(&cwd),
+        Commands::CommandGuide { query } => command_guide(query.as_deref()),
         Commands::Launch => launch(&cwd),
     }
 }
@@ -378,6 +385,11 @@ fn doctor(cwd: &std::path::Path) -> Result<()> {
     );
     println!();
     println!("{}", render_agent_compatibility(&profile.root));
+    Ok(())
+}
+
+fn command_guide(query: Option<&str>) -> Result<()> {
+    println!("{}", render_agent_command_catalog(query));
     Ok(())
 }
 

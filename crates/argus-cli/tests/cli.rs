@@ -324,6 +324,32 @@ fn arguscode_fix_edit_implement_aliases_queue_tasks() {
 }
 
 #[test]
+fn arguscode_commands_filters_familiar_agent_aliases() {
+    let dir = std::env::temp_dir().join(format!("arguscode-commands-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let out = Command::new(arguscode_bin())
+        .args(["commands", "fix"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+
+    assert!(out.status.success(), "arguscode commands failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Agent command guide"), "stdout: {stdout}");
+    assert!(stdout.contains("Filter: fix"), "stdout: {stdout}");
+    assert!(stdout.contains("arguscode fix"), "stdout: {stdout}");
+    assert!(stdout.contains("/fix"), "stdout: {stdout}");
+    assert!(
+        !stdout.contains("arguscode provider"),
+        "filtered stdout should not include provider entries: {stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn arguscode_provider_deepseek_updates_openai_compatible_config() {
     let dir = std::env::temp_dir().join(format!("arguscode-provider-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

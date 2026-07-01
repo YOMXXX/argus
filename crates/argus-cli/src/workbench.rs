@@ -5,7 +5,7 @@ use crate::background::{
 };
 use crate::checkpoints::{create_checkpoint, latest_checkpoint, restore_checkpoint};
 use crate::cockpit::{append_cockpit_event, load_cockpit_journal};
-use crate::compatibility::render_agent_compatibility;
+use crate::compatibility::{render_agent_command_catalog, render_agent_compatibility};
 use crate::config::{ArgusCodeConfig, CONFIG_PATH, SMOKE_EVAL_PATH};
 use crate::diff::load_diff_preview;
 use crate::eval_dashboard::load_eval_dashboard;
@@ -64,6 +64,7 @@ enum PaletteAction {
     RefreshFlow,
     SmokeEval,
     NewTask,
+    CommandGuide,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -118,6 +119,11 @@ const PALETTE_ITEMS: &[PaletteItem] = &[
         action: PaletteAction::StopBackgroundRun,
         label: "Stop background run",
         detail: "Request cancellation for the active harness process",
+    },
+    PaletteItem {
+        action: PaletteAction::CommandGuide,
+        label: "Open agent command guide",
+        detail: "Search familiar Claude Code, Codex, KimiCode, and MiMoCode commands",
     },
 ];
 
@@ -346,6 +352,7 @@ impl WorkbenchApp {
                 self.active_pane = WorkbenchPane::Session;
                 self.status = "New task ready. Type in the conversation input.".into();
             }
+            PaletteAction::CommandGuide => self.show_agent_command_guide(None),
         }
     }
 
@@ -401,6 +408,9 @@ impl WorkbenchApp {
             "/flow" | "/status" => self.refresh_workflow_status(),
             "/logs" | "/terminal" | "/output" => self.open_terminal_logs(),
             "/trace" | "/timeline" => self.open_trace_timeline(),
+            "/commands" | "/cheatsheet" | "/migrate" => {
+                self.show_agent_command_guide(Some(&args.join(" ")))
+            }
             "/plan" => self.create_work_plan(&args.join(" ")),
             "/next" => self.queue_next_plan_step(),
             "/done" => self.complete_plan_step(&args.join(" ")),
@@ -1043,6 +1053,15 @@ impl WorkbenchApp {
         self.active_pane = WorkbenchPane::Terminal;
         self.terminal_log = vec![render_agent_compatibility(&self.profile.root)];
         self.status = "Agent compatibility opened.".into();
+    }
+
+    fn show_agent_command_guide(&mut self, query: Option<&str>) {
+        self.active_pane = WorkbenchPane::Terminal;
+        self.terminal_log = vec![render_agent_command_catalog(query)];
+        self.status = match query.map(str::trim).filter(|query| !query.is_empty()) {
+            Some(query) => format!("Agent command guide opened for '{query}'."),
+            None => "Agent command guide opened.".into(),
+        };
     }
 
     fn refresh_workflow_status_silent(&mut self) {
@@ -2159,6 +2178,9 @@ Slash commands\n\
 /stop    Stop active background run\n\
 /logs    Open terminal output\n\
 /trace   Open trace timeline\n\
+/commands Search familiar agent command mappings\n\
+/cheatsheet Search familiar agent command mappings\n\
+/migrate Search familiar agent command mappings\n\
 /route-run Route latest task through cheap/strong models\n\
 /map     Refresh repo map\n\
 /evals   Refresh eval dashboard\n\
@@ -2578,6 +2600,25 @@ mod tests {
     }
 
     #[test]
+    fn command_palette_opens_agent_command_guide() {
+        let mut app = app();
+        let index = PALETTE_ITEMS
+            .iter()
+            .position(|item| item.label.contains("agent command guide"))
+            .expect("agent command guide palette item");
+
+        handle_key(&mut app, KeyCode::Char('k'), KeyModifiers::CONTROL);
+        app.palette_selected = index;
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        let terminal = app.terminal_log.join("\n");
+        assert_eq!(app.active_pane, WorkbenchPane::Terminal);
+        assert!(terminal.contains("Agent command guide"), "{terminal}");
+        assert!(terminal.contains("arguscode fix"), "{terminal}");
+        assert!(app.status.contains("command guide"), "{}", app.status);
+    }
+
+    #[test]
     fn help_overlay_toggles_from_keyboard_and_renders_shortcuts() {
         let mut app = app();
 
@@ -2599,6 +2640,25 @@ mod tests {
             .collect();
         assert!(text.contains("ArgusCode Help"), "{text}");
         assert!(text.contains("Ctrl+K"), "{text}");
+    }
+
+    #[test]
+    fn slash_commands_filter_agent_command_guide() {
+        let mut app = app();
+
+        for c in "/commands fix".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        let terminal = app.terminal_log.join("\n");
+        assert_eq!(app.active_pane, WorkbenchPane::Terminal);
+        assert!(terminal.contains("Agent command guide"), "{terminal}");
+        assert!(terminal.contains("Filter: fix"), "{terminal}");
+        assert!(terminal.contains("arguscode fix"), "{terminal}");
+        assert!(terminal.contains("/fix"), "{terminal}");
+        assert!(!terminal.contains("arguscode provider"), "{terminal}");
+        assert!(app.status.contains("command guide"), "{}", app.status);
     }
 
     #[test]
