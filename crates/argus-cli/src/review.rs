@@ -22,6 +22,8 @@ pub fn load_change_review(root: &Path) -> Result<String> {
     let staged_numstat = run_git(root, ["diff", "--cached", "--numstat"])?;
     let diff = run_git(root, ["diff", "--unified=0"])?;
     let staged_diff = run_git(root, ["diff", "--cached", "--unified=0"])?;
+    let context_diff = run_git(root, ["diff", "--unified=3"])?;
+    let staged_context_diff = run_git(root, ["diff", "--cached", "--unified=3"])?;
     let status = reviewable_status_lines(&status)
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
@@ -46,6 +48,12 @@ pub fn load_change_review(root: &Path) -> Result<String> {
         lines.push("".into());
         lines.push("Patch Summary".into());
         lines.extend(render_patch_summary(&summary));
+        let risk_hints = review_risk_hints(&status, &summary, &context_diff, &staged_context_diff);
+        if !risk_hints.is_empty() {
+            lines.push("".into());
+            lines.push("Risk Hints".into());
+            lines.extend(risk_hints);
+        }
     }
     if !stat.is_empty() {
         lines.push("".into());
@@ -101,6 +109,84 @@ fn render_patch_summary(summary: &PatchSummary) -> Vec<String> {
     ]
 }
 
+fn review_risk_hints(
+    status: &[String],
+    summary: &PatchSummary,
+    diff: &str,
+    staged_diff: &str,
+) -> Vec<String> {
+    let mut hints = Vec::new();
+    let mut has_source_change = false;
+    let mut has_test_change =
+        diff_changes_inline_tests(diff) || diff_changes_inline_tests(staged_diff);
+
+    for line in status {
+        let code = status_code(line);
+        let path = status_path(line);
+        if path.is_empty() {
+            continue;
+        }
+        if code.contains('D') {
+            push_unique(&mut hints, format!("- deleted file: {path}"));
+        }
+        if is_critical_project_file(path) {
+            push_unique(&mut hints, format!("- critical project file: {path}"));
+        }
+        if is_test_path(path) {
+            has_test_change = true;
+        } else if is_source_path(path) {
+            has_source_change = true;
+        }
+    }
+
+    let changed_lines = summary.insertions + summary.deletions;
+    if changed_lines >= 250 || summary.hunks >= 12 {
+        hints.push(format!(
+            "- large patch: {changed_lines} changed lines across {} hunks; inspect hunks before /accept",
+            summary.hunks
+        ));
+    }
+
+    if has_source_change && !has_test_change {
+        hints.push(
+            "- source changes without test changes: add/update tests or run a targeted verify gate"
+                .into(),
+        );
+    }
+
+    hints
+}
+
+fn push_unique(values: &mut Vec<String>, value: String) {
+    if !values.iter().any(|existing| existing == &value) {
+        values.push(value);
+    }
+}
+
+fn diff_changes_inline_tests(diff: &str) -> bool {
+    let mut hunk_has_change = false;
+    let mut hunk_has_inline_test = false;
+    for line in diff.lines() {
+        if line.starts_with("@@ ") {
+            if hunk_has_change && hunk_has_inline_test {
+                return true;
+            }
+            hunk_has_change = false;
+            hunk_has_inline_test = false;
+            continue;
+        }
+        let is_changed_line = (line.starts_with('+') && !line.starts_with("+++"))
+            || (line.starts_with('-') && !line.starts_with("---"));
+        if is_changed_line {
+            hunk_has_change = true;
+        }
+        if line.contains("#[test]") || line.contains("#[cfg(test)]") || line.contains("mod tests") {
+            hunk_has_inline_test = true;
+        }
+    }
+    hunk_has_change && hunk_has_inline_test
+}
+
 fn add_numstat(summary: &mut PatchSummary, numstat: &str) {
     for line in numstat.lines() {
         let mut parts = line.split('\t');
@@ -139,10 +225,81 @@ fn count_reviewable_hunks(diff: &str) -> usize {
 }
 
 fn format_change_file(status_line: &str) -> String {
-    let code = status_line.get(..2).unwrap_or(status_line).trim();
-    let path = status_line.get(3..).unwrap_or(status_line).trim();
+    let code = status_code(status_line).trim();
+    let path = status_path(status_line);
     let code = if code.is_empty() { "modified" } else { code };
     format!("- {code:<2} {path}")
+}
+
+fn status_code(status_line: &str) -> &str {
+    status_line.get(..2).unwrap_or(status_line)
+}
+
+fn status_path(status_line: &str) -> &str {
+    let path = status_line.get(3..).unwrap_or(status_line).trim();
+    path.rsplit_once(" -> ")
+        .map(|(_, renamed_to)| renamed_to)
+        .unwrap_or(path)
+}
+
+fn is_critical_project_file(path: &str) -> bool {
+    matches!(
+        path,
+        "Cargo.toml"
+            | "Cargo.lock"
+            | "package.json"
+            | "package-lock.json"
+            | "pnpm-lock.yaml"
+            | "yarn.lock"
+            | "bun.lockb"
+            | "pyproject.toml"
+            | "requirements.txt"
+            | "go.mod"
+            | "go.sum"
+            | "Dockerfile"
+            | "docker-compose.yml"
+            | "docker-compose.yaml"
+            | "install.sh"
+            | "RELEASING.md"
+            | "CHANGELOG.md"
+    ) || path.starts_with(".github/workflows/")
+        || (path.starts_with("scripts/") && path.contains("release"))
+}
+
+fn is_source_path(path: &str) -> bool {
+    path.starts_with("src/")
+        || path.starts_with("crates/")
+        || matches!(
+            path.rsplit_once('.').map(|(_, ext)| ext),
+            Some(
+                "rs" | "go"
+                    | "py"
+                    | "ts"
+                    | "tsx"
+                    | "js"
+                    | "jsx"
+                    | "java"
+                    | "kt"
+                    | "swift"
+                    | "c"
+                    | "cc"
+                    | "cpp"
+                    | "h"
+                    | "hpp"
+                    | "rb"
+                    | "php"
+                    | "cs"
+            )
+        )
+}
+
+fn is_test_path(path: &str) -> bool {
+    path.starts_with("tests/")
+        || path.contains("/tests/")
+        || path.contains("__tests__/")
+        || path.contains("_test.")
+        || path.contains(".test.")
+        || path.contains(".spec.")
 }
 
 pub fn record_review_decision(root: &Path, decision: &str, note: &str) -> Result<ReviewDecision> {
@@ -293,6 +450,203 @@ mod tests {
         assert!(review.contains("hunks: 1"), "{review}");
         assert!(review.contains("insertions: 2"), "{review}");
         assert!(review.contains("deletions: 0"), "{review}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_change_review_flags_risky_config_and_missing_tests() {
+        let dir = temp_dir("review_riskhints");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn value() -> i32 { 1 }\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "Cargo.toml", "src/lib.rs"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "user.name=Argus Test",
+                "commit",
+                "-m",
+                "seed",
+            ])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn value() -> i32 { 2 }\n").unwrap();
+
+        let review = super::load_change_review(&dir).unwrap();
+
+        assert!(review.contains("Risk Hints"), "{review}");
+        assert!(
+            review.contains("critical project file: Cargo.toml"),
+            "{review}"
+        );
+        assert!(
+            review.contains("source changes without test changes"),
+            "{review}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_change_review_suppresses_missing_test_hint_when_tests_change() {
+        let dir = temp_dir("review_risktests");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("tests")).unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn value() -> i32 { 1 }\n").unwrap();
+        std::fs::write(
+            dir.join("tests/value.rs"),
+            "#[test]\nfn value_is_one() {}\n",
+        )
+        .unwrap();
+        std::process::Command::new("git")
+            .args(["add", "src/lib.rs", "tests/value.rs"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "user.name=Argus Test",
+                "commit",
+                "-m",
+                "seed",
+            ])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn value() -> i32 { 2 }\n").unwrap();
+        std::fs::write(
+            dir.join("tests/value.rs"),
+            "#[test]\nfn value_is_two() {}\n",
+        )
+        .unwrap();
+
+        let review = super::load_change_review(&dir).unwrap();
+
+        assert!(
+            !review.contains("source changes without test changes"),
+            "{review}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_change_review_suppresses_missing_test_hint_for_inline_rust_tests() {
+        let dir = temp_dir("review_inlinetests");
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "pub fn value() -> i32 { 1 }\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn value_is_one() {}\n}\n",
+        )
+        .unwrap();
+        std::process::Command::new("git")
+            .args(["add", "src/lib.rs"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "user.name=Argus Test",
+                "commit",
+                "-m",
+                "seed",
+            ])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            "pub fn value() -> i32 { 2 }\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn value_is_two() {}\n}\n",
+        )
+        .unwrap();
+
+        let review = super::load_change_review(&dir).unwrap();
+
+        assert!(
+            !review.contains("source changes without test changes"),
+            "{review}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_change_review_flags_deleted_files_and_large_patches() {
+        let dir = temp_dir("review_large");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let original = (0..20)
+            .map(|index| format!("line {index}\n"))
+            .collect::<String>();
+        std::fs::write(dir.join("large.txt"), original).unwrap();
+        std::fs::write(dir.join("remove.txt"), "delete me\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "large.txt", "remove.txt"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "user.name=Argus Test",
+                "commit",
+                "-m",
+                "seed",
+            ])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let changed = (0..330)
+            .map(|index| format!("changed line {index}\n"))
+            .collect::<String>();
+        std::fs::write(dir.join("large.txt"), changed).unwrap();
+        std::fs::remove_file(dir.join("remove.txt")).unwrap();
+
+        let review = super::load_change_review(&dir).unwrap();
+
+        assert!(review.contains("Risk Hints"), "{review}");
+        assert!(review.contains("deleted file: remove.txt"), "{review}");
+        assert!(review.contains("large patch:"), "{review}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
