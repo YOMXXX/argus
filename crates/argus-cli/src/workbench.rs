@@ -15,7 +15,7 @@ use crate::launch::{load_launch_checklist, render_launch_checklist};
 use crate::memory::{append_lesson, load_memory_preview};
 use crate::plans::{complete_current_step, create_plan, load_plan_status, queue_next_step};
 use crate::project::{detect_project, init_project, ProjectProfile};
-use crate::repair::build_repair_task;
+use crate::repair::{build_harness_repair_task, build_repair_task};
 use crate::repo_map::load_repo_map;
 use crate::review::{load_change_review, record_review_decision};
 use crate::route_runner::{run_task_through_route, RouteRunOutput};
@@ -1420,7 +1420,11 @@ impl WorkbenchApp {
             }
             "failed" => {
                 self.refresh_after_background_run(&run);
-                self.status = format!("Background run failed: {}", run.task_id);
+                self.status = if run.detail.contains("repair queued") {
+                    format!("Background run failed. Repair task queued: {}", run.task_id)
+                } else {
+                    format!("Background run failed: {}", run.task_id)
+                };
             }
             _ => {}
         }
@@ -1650,6 +1654,7 @@ impl WorkbenchApp {
 
         let root = self.profile.root.clone();
         let task_id = task.id.clone();
+        let task_text = task.text.clone();
         std::thread::spawn(move || {
             let result = runner(root.clone(), task);
             match result {
@@ -1665,13 +1670,24 @@ impl WorkbenchApp {
                     );
                 }
                 Err(err) => {
-                    let _ = record_background_run(
-                        &root,
-                        &task_id,
-                        "failed",
-                        &format!("task {task_id} failed: {err}"),
-                        None,
-                    );
+                    let failure = err.to_string();
+                    let _ = update_task_status(&root, &task_id, "failed");
+                    let repair_text = build_harness_repair_task(&task_text, &failure);
+                    let detail = match queue_task(&root, &repair_text) {
+                        Ok(record) => {
+                            let repair_line =
+                                format!("repair queued: {} {}", record.id, record.text);
+                            let _ = append_background_output(&root, "system", &repair_line);
+                            format!(
+                                "task {task_id} failed: {failure}; repair queued {}",
+                                record.id
+                            )
+                        }
+                        Err(queue_err) => {
+                            format!("task {task_id} failed: {failure}; repair queue failed: {queue_err}")
+                        }
+                    };
+                    let _ = record_background_run(&root, &task_id, "failed", &detail, None);
                 }
             }
         });
@@ -1739,6 +1755,9 @@ impl WorkbenchApp {
                 Ok(())
             }
             Err(err) => {
+                let _ = update_task_status(&self.profile.root, &task.id, "failed");
+                let repair_task = build_harness_repair_task(&task.text, &err.to_string());
+                let repair = queue_task(&self.profile.root, &repair_task);
                 self.task_queue = list_tasks(&self.profile.root)?;
                 self.session_history = list_sessions(&self.profile.root)?;
                 self.latest_trace_path = self
@@ -1751,13 +1770,30 @@ impl WorkbenchApp {
                     load_workflow_status(&self.profile.root, &self.config.verify.commands)?;
                 self.trace_preview =
                     load_trace_preview(&self.profile.root, self.latest_trace_path.as_deref());
-                self.status = format!("Harness run failed: {err}");
                 self.terminal_log.push(format!("error: {err}"));
-                self.record_cockpit_event(
-                    "run",
-                    &format!("task {} failed: {err}", task.id),
-                    "/retry <task-id>, /rework <task>, or /rollback",
-                );
+                match repair {
+                    Ok(record) => {
+                        self.terminal_log
+                            .push(format!("repair: {} {}", record.id, record.text));
+                        self.status =
+                            format!("Harness run failed. Repair task queued: {}", record.id);
+                        self.record_cockpit_event(
+                            "run",
+                            &format!("task {} failed; repair queued {}", task.id, record.id),
+                            "/run the repair task, /rollback, or /tasks",
+                        );
+                    }
+                    Err(queue_err) => {
+                        self.status = format!("Harness run failed: {err}");
+                        self.terminal_log
+                            .push(format!("could not queue repair task: {queue_err}"));
+                        self.record_cockpit_event(
+                            "run",
+                            &format!("task {} failed: {err}", task.id),
+                            "/retry <task-id>, /rework <task>, or /rollback",
+                        );
+                    }
+                }
                 Err(err)
             }
         }
@@ -4352,6 +4388,41 @@ mod tests {
     }
 
     #[test]
+    fn run_failure_marks_task_failed_and_queues_repair_task() {
+        let dir = temp_dir("run-failure-repair");
+        std::fs::create_dir_all(&dir).unwrap();
+        let original = queue_task(&dir, "implement parser recovery").unwrap();
+        let seed = app_with_root(dir.clone());
+        let mut app = WorkbenchApp::load(seed.profile, seed.config).unwrap();
+
+        let result =
+            app.run_latest_task_with(&mut |_root, _task| Err(anyhow::anyhow!("model crashed")));
+
+        assert!(result.is_err());
+        let tasks = list_tasks(&dir).unwrap();
+        assert_eq!(tasks.len(), 2, "{tasks:?}");
+        assert_eq!(tasks[0].id, original.id);
+        assert_eq!(tasks[0].status, "failed");
+        assert!(
+            tasks[1].text.contains("Repair harness run failure"),
+            "{tasks:?}"
+        );
+        assert!(
+            tasks[1].text.contains("implement parser recovery"),
+            "{tasks:?}"
+        );
+        assert!(tasks[1].text.contains("model crashed"), "{tasks:?}");
+        assert!(app.status.contains("Repair task queued"), "{}", app.status);
+        assert!(
+            app.terminal_log.join("\n").contains("repair:"),
+            "{:?}",
+            app.terminal_log
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn workbench_starts_latest_task_in_background_and_refreshes_completion() {
         let dir = temp_dir("background-run");
         std::fs::create_dir_all(&dir).unwrap();
@@ -4419,6 +4490,48 @@ mod tests {
             app.cockpit_journal
         );
         assert!(app.status.contains("Background run done"), "{}", app.status);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn background_failure_marks_task_failed_and_queues_repair_task() {
+        let dir = temp_dir("background-failure-repair");
+        std::fs::create_dir_all(&dir).unwrap();
+        let original = queue_task(&dir, "repair background failure").unwrap();
+        let seed = app_with_root(dir.clone());
+        let mut app = WorkbenchApp::load(seed.profile, seed.config).unwrap();
+
+        app.start_latest_task_background_with(|_root, _task| {
+            Err(anyhow::anyhow!("background crashed"))
+        })
+        .unwrap();
+
+        for _ in 0..40 {
+            app.tick();
+            let state = crate::background::load_background_run(&dir).unwrap();
+            if state.as_ref().is_some_and(|state| state.status == "failed") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        app.tick();
+
+        let tasks = list_tasks(&dir).unwrap();
+        assert_eq!(tasks.len(), 2, "{tasks:?}");
+        assert_eq!(tasks[0].id, original.id);
+        assert_eq!(tasks[0].status, "failed");
+        assert!(
+            tasks[1].text.contains("Repair harness run failure"),
+            "{tasks:?}"
+        );
+        assert!(tasks[1].text.contains("background crashed"), "{tasks:?}");
+        assert!(app.status.contains("Repair task queued"), "{}", app.status);
+        assert!(
+            app.terminal_log.join("\n").contains("repair queued"),
+            "{:?}",
+            app.terminal_log
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -40,6 +40,14 @@ pub fn build_repair_task(commands: &[String], detail: &str) -> String {
     )
 }
 
+pub fn build_harness_repair_task(task_text: &str, detail: &str) -> String {
+    format!(
+        "Repair harness run failure. Original task: {}. Failure: {}. Diagnose the failed run, make the smallest safe fix, then verify before marking done.",
+        compact(task_text, 180),
+        compact(detail, 320)
+    )
+}
+
 fn compact(value: &str, max_chars: usize) -> String {
     let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
     if normalized.chars().count() <= max_chars {
@@ -80,5 +88,14 @@ mod tests {
         assert!(task.contains("Repair verification failure"), "{task}");
         assert!(task.contains("cargo test --workspace --locked"), "{task}");
         assert!(task.contains("command failed with exit status 1"), "{task}");
+    }
+
+    #[test]
+    fn build_harness_repair_task_includes_task_and_failure_detail() {
+        let task = build_harness_repair_task("implement parser recovery", "model crashed");
+
+        assert!(task.contains("Repair harness run failure"), "{task}");
+        assert!(task.contains("implement parser recovery"), "{task}");
+        assert!(task.contains("model crashed"), "{task}");
     }
 }
