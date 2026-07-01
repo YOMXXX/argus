@@ -3,8 +3,9 @@ use crate::config::ArgusCodeConfig;
 use crate::sessions::append_session;
 use crate::tasks::{update_task_status, TaskRecord};
 use anyhow::Result;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus, Stdio};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HarnessRunOutput {
@@ -29,11 +30,9 @@ pub fn run_task_through_harness(root: &Path, record: &TaskRecord) -> Result<Harn
 
     let mut command = build_argus_run_command(&argus_binary_path()?, root, &config, record, &trace);
 
-    let output = command.output()?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let (status, stdout, stderr) = run_command_with_background_output(root, &mut command)?;
 
-    if output.status.success() {
+    if status.success() {
         update_task_status(root, &record.id, "done")?;
         append_session(root, &record.id, &record.text, "done", trace.clone())?;
         append_cockpit_event(
@@ -59,13 +58,56 @@ pub fn run_task_through_harness(root: &Path, record: &TaskRecord) -> Result<Harn
             &format!("task {} completed with status failed", record.id),
             "/retry <task-id>, /rework <task>, or inspect trace",
         )?;
-        anyhow::bail!(
-            "Argus harness failed with {}\n--- stdout ---\n{}\n--- stderr ---\n{}",
-            output.status,
-            stdout,
-            stderr
-        )
+        anyhow::bail!("Argus harness failed with {status}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}")
     }
+}
+
+fn run_command_with_background_output(
+    root: &Path,
+    command: &mut Command,
+) -> Result<(ExitStatus, String, String)> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("failed to capture stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("failed to capture stderr"))?;
+    let stdout_root = root.to_path_buf();
+    let stderr_root = root.to_path_buf();
+    let stdout_task =
+        std::thread::spawn(move || read_stream_to_background(&stdout_root, "stdout", stdout));
+    let stderr_task =
+        std::thread::spawn(move || read_stream_to_background(&stderr_root, "stderr", stderr));
+    let status = child.wait()?;
+    let stdout = stdout_task
+        .join()
+        .map_err(|_| anyhow::anyhow!("stdout reader thread panicked"))??;
+    let stderr = stderr_task
+        .join()
+        .map_err(|_| anyhow::anyhow!("stderr reader thread panicked"))??;
+    Ok((status, stdout, stderr))
+}
+
+fn read_stream_to_background<R>(root: &Path, stream: &str, reader: R) -> Result<String>
+where
+    R: Read,
+{
+    let mut reader = BufReader::new(reader);
+    let mut output = String::new();
+    loop {
+        let mut line = String::new();
+        let bytes = reader.read_line(&mut line)?;
+        if bytes == 0 {
+            break;
+        }
+        crate::background::append_background_output(root, stream, &line)?;
+        output.push_str(&line);
+    }
+    Ok(output)
 }
 
 fn build_argus_run_command(
@@ -129,6 +171,53 @@ mod tests {
         ArgusCodeConfig, MemoryConfig, ProjectConfig, ProviderConfig, RulesConfig, SecurityConfig,
         UiConfig, VerifyConfig,
     };
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "argus-harness-{name}-{}-{nanos}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn command_stream_writes_stdout_before_process_exits() {
+        let dir = temp_dir("stream");
+        std::fs::create_dir_all(&dir).unwrap();
+        let run_dir = dir.clone();
+        let handle = std::thread::spawn(move || {
+            let mut command = Command::new("sh");
+            command
+                .arg("-c")
+                .arg("echo first; sleep 0.35; echo second; echo warn >&2");
+            super::run_command_with_background_output(&run_dir, &mut command).unwrap()
+        });
+
+        let mut saw_first = false;
+        for _ in 0..10 {
+            let output = crate::background::list_background_output(&dir).unwrap();
+            if output
+                .iter()
+                .any(|record| record.stream == "stdout" && record.text == "first")
+            {
+                saw_first = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        assert!(saw_first, "stdout should stream before process exits");
+        let (status, stdout, stderr) = handle.join().unwrap();
+        assert!(status.success(), "{status}");
+        assert!(stdout.contains("first"), "{stdout}");
+        assert!(stdout.contains("second"), "{stdout}");
+        assert!(stderr.contains("warn"), "{stderr}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn openai_compatible_config_adds_base_url_and_api_key_alias() {

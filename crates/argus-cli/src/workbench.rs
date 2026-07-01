@@ -1,4 +1,7 @@
-use crate::background::{load_background_run, record_background_run, BackgroundRun};
+use crate::background::{
+    clear_background_output, list_background_output, load_background_run, record_background_run,
+    BackgroundRun,
+};
 use crate::checkpoints::{create_checkpoint, latest_checkpoint, restore_checkpoint};
 use crate::cockpit::{append_cockpit_event, load_cockpit_journal};
 use crate::config::{ArgusCodeConfig, CONFIG_PATH, SMOKE_EVAL_PATH};
@@ -133,6 +136,7 @@ pub struct WorkbenchApp {
     pub input: String,
     pub status: String,
     background_run_seen: Option<String>,
+    background_output_seen: usize,
 }
 
 struct WorkbenchLoadedData {
@@ -233,6 +237,7 @@ impl WorkbenchApp {
             input: String::new(),
             status: "Ready. Type a task, Tab switches panes, Ctrl+K opens command palette.".into(),
             background_run_seen: None,
+            background_output_seen: 0,
         }
     }
 
@@ -1023,6 +1028,7 @@ impl WorkbenchApp {
 
     pub fn tick(&mut self) {
         self.refresh_cockpit_journal_silent();
+        self.refresh_background_output_silent();
         let Ok(Some(run)) = load_background_run(&self.profile.root) else {
             return;
         };
@@ -1044,6 +1050,27 @@ impl WorkbenchApp {
                 self.status = format!("Background run failed: {}", run.task_id);
             }
             _ => {}
+        }
+    }
+
+    fn refresh_background_output_silent(&mut self) {
+        let Ok(records) = list_background_output(&self.profile.root) else {
+            return;
+        };
+        let next_unread = if records.len() < self.background_output_seen {
+            0
+        } else {
+            self.background_output_seen
+        };
+        for record in records.iter().skip(next_unread) {
+            self.terminal_log
+                .push(format!("[{}] {}", record.stream, record.text));
+        }
+        self.background_output_seen = records.len();
+        const MAX_TERMINAL_LINES: usize = 120;
+        if self.terminal_log.len() > MAX_TERMINAL_LINES {
+            let drop_count = self.terminal_log.len() - MAX_TERMINAL_LINES;
+            self.terminal_log.drain(..drop_count);
         }
     }
 
@@ -1157,6 +1184,8 @@ impl WorkbenchApp {
             &self.profile.root,
             &format!("before task {} background run", task.id),
         )?;
+        clear_background_output(&self.profile.root)?;
+        self.background_output_seen = 0;
         let trace = PathBuf::from(".argus/tasks").join(format!("{}.trace.jsonl", task.id));
         let state = record_background_run(
             &self.profile.root,
@@ -3360,6 +3389,42 @@ mod tests {
             app.cockpit_journal
         );
         assert!(app.status.contains("Background run done"), "{}", app.status);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tick_appends_background_output_without_duplicates() {
+        let dir = temp_dir("background-output");
+        std::fs::create_dir_all(&dir).unwrap();
+        let seed = app_with_root(dir.clone());
+        let mut app = WorkbenchApp::load(seed.profile, seed.config).unwrap();
+
+        crate::background::append_background_output(&dir, "stdout", "first line\n").unwrap();
+        crate::background::append_background_output(&dir, "stderr", "warn line\n").unwrap();
+
+        app.tick();
+        app.tick();
+
+        let terminal = app.terminal_log.join("\n");
+        assert!(terminal.contains("[stdout] first line"), "{terminal}");
+        assert!(terminal.contains("[stderr] warn line"), "{terminal}");
+        assert_eq!(
+            app.terminal_log
+                .iter()
+                .filter(|line| line.contains("first line"))
+                .count(),
+            1,
+            "{:?}",
+            app.terminal_log
+        );
+
+        crate::background::clear_background_output(&dir).unwrap();
+        crate::background::append_background_output(&dir, "stdout", "new run\n").unwrap();
+        app.tick();
+
+        let terminal = app.terminal_log.join("\n");
+        assert!(terminal.contains("[stdout] new run"), "{terminal}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
