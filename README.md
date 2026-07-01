@@ -122,6 +122,7 @@ arguscode
 # The Trace panel shows recent session history and the latest task trace timeline.
 # The session panel shows git status/diff preview and can refresh it from Ctrl+K.
 # Use /flow to see the current queue -> run -> verify -> review -> rework state.
+# The Terminal panel includes an Execution Cockpit journal for recent run/verify/review events.
 # The Terminal panel can run the configured verification gate from Ctrl+K.
 # The input box also supports slash commands such as /verify, /run, /route-run, /diff, and /history.
 # Switch models in-session with /provider deepseek deepseek-chat or /model <name>.

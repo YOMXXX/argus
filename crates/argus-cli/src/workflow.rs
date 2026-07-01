@@ -235,6 +235,7 @@ fn is_argus_runtime_status_line(line: &str) -> bool {
         ".argus/tasks/",
         ".argus/sessions/",
         ".argus/reviews/",
+        ".argus/cockpit/",
         ".argus/checkpoints/",
         ".argus/eval/",
         ".argus/eval-runs/",
@@ -255,6 +256,7 @@ fn run_git<const N: usize>(root: &Path, args: [&str; N]) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cockpit::append_cockpit_event;
     use crate::review::record_review_decision;
     use crate::sessions::append_session;
     use crate::tasks::{queue_task, update_task_status};
@@ -379,6 +381,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         init_git(&dir);
         queue_task(&dir, "metadata only").unwrap();
+        append_cockpit_event(&dir, "run", "metadata only", "/review").unwrap();
 
         let status = load_workflow_status(&dir, &["cargo test".into()]).unwrap();
 

@@ -1,4 +1,5 @@
 use crate::checkpoints::{create_checkpoint, latest_checkpoint, restore_checkpoint};
+use crate::cockpit::{append_cockpit_event, load_cockpit_journal};
 use crate::config::{ArgusCodeConfig, CONFIG_PATH, SMOKE_EVAL_PATH};
 use crate::diff::load_diff_preview;
 use crate::eval_dashboard::load_eval_dashboard;
@@ -120,6 +121,7 @@ pub struct WorkbenchApp {
     pub repo_map: String,
     pub eval_dashboard: String,
     pub memory_preview: String,
+    pub cockpit_journal: String,
     pub terminal_log: Vec<String>,
     pub latest_trace_path: Option<PathBuf>,
     pub input: String,
@@ -136,6 +138,7 @@ struct WorkbenchLoadedData {
     repo_map: String,
     eval_dashboard: String,
     memory_preview: String,
+    cockpit_journal: String,
 }
 
 impl WorkbenchApp {
@@ -153,6 +156,7 @@ impl WorkbenchApp {
                 repo_map: "(not loaded)".into(),
                 eval_dashboard: "(not loaded)".into(),
                 memory_preview: "(not loaded)".into(),
+                cockpit_journal: "(not loaded)".into(),
             },
         )
     }
@@ -168,6 +172,7 @@ impl WorkbenchApp {
         let repo_map = load_repo_map(&profile.root, &profile, &config)?;
         let eval_dashboard = load_eval_dashboard(&profile.root)?;
         let memory_preview = load_memory_preview(&profile.root, &config.memory)?;
+        let cockpit_journal = load_cockpit_journal(&profile.root)?;
         Ok(Self::with_state(
             profile,
             config,
@@ -181,6 +186,7 @@ impl WorkbenchApp {
                 repo_map,
                 eval_dashboard,
                 memory_preview,
+                cockpit_journal,
             },
         ))
     }
@@ -209,6 +215,7 @@ impl WorkbenchApp {
             repo_map: data.repo_map,
             eval_dashboard: data.eval_dashboard,
             memory_preview: data.memory_preview,
+            cockpit_journal: data.cockpit_journal,
             terminal_log: Vec::new(),
             latest_trace_path,
             input: String::new(),
@@ -245,6 +252,11 @@ impl WorkbenchApp {
                 Ok(record) => {
                     self.status = format!("Queued task {}: {}", record.id, record.text);
                     self.task_queue.push(record);
+                    self.record_cockpit_event(
+                        "queue",
+                        &format!("queued task: {task}"),
+                        "/run or /route-run",
+                    );
                     self.refresh_workflow_status_silent();
                     self.input.clear();
                 }
@@ -562,6 +574,11 @@ impl WorkbenchApp {
                     format!("label: {}", record.label),
                     format!("files: {}", record.file_count),
                 ];
+                self.record_cockpit_event(
+                    "checkpoint",
+                    &format!("saved {} ({} files)", record.id, record.file_count),
+                    "/run, /route-run, or /rollback",
+                );
                 self.status = format!("Checkpoint saved: {}", record.id);
             }
             Err(err) => {
@@ -599,6 +616,11 @@ impl WorkbenchApp {
                     format!("label: {}", record.label),
                     format!("files: {}", record.file_count),
                 ];
+                self.record_cockpit_event(
+                    "rollback",
+                    &format!("restored {} ({} files)", record.id, record.file_count),
+                    "/flow, then /verify",
+                );
                 self.status = format!("Rolled back to checkpoint {}", record.id);
             }
             Err(err) => {
@@ -727,6 +749,11 @@ impl WorkbenchApp {
                     }
                 }
                 self.refresh_workflow_status_silent();
+                self.record_cockpit_event(
+                    "queue",
+                    &format!("{label}: {}", task.id),
+                    "/run or /route-run",
+                );
                 self.status = format!("{label}: {}", task.id);
             }
             Ok(None) => {
@@ -868,12 +895,29 @@ impl WorkbenchApp {
         }
     }
 
+    fn refresh_cockpit_journal_silent(&mut self) {
+        if let Ok(journal) = load_cockpit_journal(&self.profile.root) {
+            self.cockpit_journal = journal;
+        }
+    }
+
+    fn record_cockpit_event(&mut self, phase: &str, detail: &str, next: &str) {
+        if append_cockpit_event(&self.profile.root, phase, detail, next).is_ok() {
+            self.refresh_cockpit_journal_silent();
+        }
+    }
+
     fn refresh_change_review(&mut self) {
         self.active_pane = WorkbenchPane::Session;
         match load_change_review(&self.profile.root) {
             Ok(review) => {
                 self.change_review = review;
                 self.refresh_workflow_status_silent();
+                self.record_cockpit_event(
+                    "review",
+                    "refreshed change review",
+                    "/accept <note> or /rework <task>",
+                );
                 self.status = "Change review refreshed.".into();
             }
             Err(err) => {
@@ -893,6 +937,11 @@ impl WorkbenchApp {
                     format!("decision: {}", record.decision),
                     format!("note: {}", record.note),
                 ];
+                self.record_cockpit_event(
+                    "review",
+                    &format!("accepted: {}", record.note),
+                    "commit/push or /new",
+                );
                 self.status = "Review accepted.".into();
             }
             Err(err) => {
@@ -914,6 +963,11 @@ impl WorkbenchApp {
                 self.task_queue.push(record.clone());
                 let _ = record_review_decision(&self.profile.root, "rework", task);
                 self.refresh_workflow_status_silent();
+                self.record_cockpit_event(
+                    "rework",
+                    &format!("queued follow-up: {task}"),
+                    "/run or /route-run",
+                );
                 self.status = format!("Rework queued: {}", record.id);
             }
             Err(err) => {
@@ -943,6 +997,11 @@ impl WorkbenchApp {
             format!("checkpoint: {}", checkpoint.id),
             format!("$ arguscode resume --run  # {}", task.text),
         ];
+        self.record_cockpit_event(
+            "run",
+            &format!("starting task {} through harness", task.id),
+            "wait for trace and verification result",
+        );
 
         match runner(&self.profile.root, &task) {
             Ok(output) => {
@@ -969,6 +1028,11 @@ impl WorkbenchApp {
                     load_workflow_status(&self.profile.root, &self.config.verify.commands)?;
                 self.trace_preview =
                     load_trace_preview(&self.profile.root, self.latest_trace_path.as_deref());
+                self.record_cockpit_event(
+                    "run",
+                    &format!("task {} {}", output.task_id, output.status),
+                    "/review, /verify, or /accept <note>",
+                );
                 self.status = format!("Task {} {}", output.task_id, output.status);
                 Ok(())
             }
@@ -987,6 +1051,11 @@ impl WorkbenchApp {
                     load_trace_preview(&self.profile.root, self.latest_trace_path.as_deref());
                 self.status = format!("Harness run failed: {err}");
                 self.terminal_log.push(format!("error: {err}"));
+                self.record_cockpit_event(
+                    "run",
+                    &format!("task {} failed: {err}", task.id),
+                    "/retry <task-id>, /rework <task>, or /rollback",
+                );
                 Err(err)
             }
         }
@@ -1011,6 +1080,11 @@ impl WorkbenchApp {
                 self.config.provider.default_model
             ),
         ];
+        self.record_cockpit_event(
+            "eval",
+            &format!("running suite {}", suite.display()),
+            "wait for pass-rate report",
+        );
 
         let output = runner(&self.profile.root, &self.config, &suite)?;
         if !output.stdout.trim().is_empty() {
@@ -1028,6 +1102,11 @@ impl WorkbenchApp {
         self.change_review = load_change_review(&self.profile.root)?;
         self.workflow_status =
             load_workflow_status(&self.profile.root, &self.config.verify.commands)?;
+        self.record_cockpit_event(
+            "eval",
+            &format!("suite {} {}", output.suite.display(), output.status),
+            "/review, /rework <task>, or inspect report",
+        );
         self.status = if output.status == "passed" {
             format!("Eval passed: {}", output.suite.display())
         } else {
@@ -1068,6 +1147,14 @@ impl WorkbenchApp {
                 task.text, cheap_model, strong_model
             ),
         ];
+        self.record_cockpit_event(
+            "route",
+            &format!(
+                "starting task {} through {} -> {}",
+                task.id, cheap_model, strong_model
+            ),
+            "wait for route decision and trace",
+        );
 
         match runner(&self.profile.root, &task, cheap_model, strong_model) {
             Ok(output) => {
@@ -1097,6 +1184,14 @@ impl WorkbenchApp {
                     load_workflow_status(&self.profile.root, &self.config.verify.commands)?;
                 self.trace_preview =
                     load_trace_preview(&self.profile.root, self.latest_trace_path.as_deref());
+                self.record_cockpit_event(
+                    "route",
+                    &format!(
+                        "task {} {} via {} -> {}",
+                        output.task_id, output.status, output.cheap_model, output.strong_model
+                    ),
+                    "/review, /verify, or /accept <note>",
+                );
                 self.status = format!(
                     "Route task {} {}: {} -> {}",
                     output.task_id, output.status, output.cheap_model, output.strong_model
@@ -1118,6 +1213,11 @@ impl WorkbenchApp {
                     load_trace_preview(&self.profile.root, self.latest_trace_path.as_deref());
                 self.status = format!("Route run failed: {err}");
                 self.terminal_log.push(format!("error: {err}"));
+                self.record_cockpit_event(
+                    "route",
+                    &format!("task {} failed: {err}", task.id),
+                    "/retry <task-id>, /rework <task>, or /rollback",
+                );
                 Err(err)
             }
         }
@@ -1135,17 +1235,28 @@ impl WorkbenchApp {
                 .map(|command| format!("$ {command}"))
                 .collect()
         };
+        self.record_cockpit_event(
+            "verify",
+            &format!("running {} command(s)", self.config.verify.commands.len()),
+            "wait for verification gate",
+        );
 
         let output = run_configured_verify(&self.profile.root, &self.config.verify.commands)?;
         self.terminal_log.push(output.detail.clone());
         if output.passed {
             self.terminal_log.push("verification passed".into());
             self.refresh_workflow_status_silent();
+            self.record_cockpit_event("verify", &output.detail, "/review or /accept <note>");
             self.status = format!("Verification passed: {} command(s)", output.commands.len());
             Ok(())
         } else {
             self.terminal_log.push("verification failed".into());
             self.refresh_workflow_status_silent();
+            self.record_cockpit_event(
+                "verify",
+                &format!("failed: {}", output.detail),
+                "/rework <task> or inspect terminal output",
+            );
             self.status = "Verification failed.".into();
             anyhow::bail!(output.detail)
         }
@@ -1239,7 +1350,7 @@ pub fn ui(f: &mut Frame, app: &WorkbenchApp) {
         .constraints([
             Constraint::Length(3),
             Constraint::Min(12),
-            Constraint::Length(6),
+            Constraint::Length(10),
             Constraint::Length(1),
         ])
         .split(f.area());
@@ -1442,26 +1553,26 @@ fn render_trace(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
         }
     }
     lines.push(Line::from(""));
-    lines.push(Line::from("Memory"));
-    for line in app.memory_preview.lines().take(12) {
-        lines.push(Line::from(line.to_string()));
-    }
-    lines.push(Line::from(""));
-    for line in app.eval_dashboard.lines().take(10) {
-        lines.push(Line::from(line.to_string()));
-    }
-    lines.push(Line::from(""));
     lines.push(Line::from("Session History"));
     if app.session_history.is_empty() {
         lines.push(Line::from("(empty)"));
     } else {
-        for session in app.session_history.iter().rev().take(4) {
+        for session in app.session_history.iter().rev().take(3) {
             lines.push(Line::from(format!(
                 "[{}] {}",
                 session.status, session.task_text
             )));
             lines.push(Line::from(session.trace.display().to_string()));
         }
+    }
+    lines.push(Line::from(""));
+    for line in app.eval_dashboard.lines().take(6) {
+        lines.push(Line::from(line.to_string()));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from("Memory"));
+    for line in app.memory_preview.lines().take(4) {
+        lines.push(Line::from(line.to_string()));
     }
     f.render_widget(
         Paragraph::new(lines)
@@ -1475,7 +1586,7 @@ fn render_trace(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
 }
 
 fn render_terminal(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
-    let commands = if !app.terminal_log.is_empty() {
+    let output = if !app.terminal_log.is_empty() {
         app.terminal_log.join("\n")
     } else if app.config.verify.commands.is_empty() {
         "No verification command configured.".to_string()
@@ -1488,10 +1599,17 @@ fn render_terminal(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
             .collect::<Vec<_>>()
             .join("\n")
     };
+    let cockpit = app
+        .cockpit_journal
+        .lines()
+        .take(3)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let commands = format!("{cockpit}\n\nOutput\n{output}");
     f.render_widget(
         Paragraph::new(commands)
             .block(panel_block(
-                "Terminal / Verify",
+                "Execution Cockpit / Terminal",
                 app.active_pane == WorkbenchPane::Terminal,
             ))
             .wrap(Wrap { trim: false }),
@@ -1724,6 +1842,40 @@ mod tests {
     }
 
     #[test]
+    fn workbench_loads_and_renders_execution_cockpit() {
+        let dir = temp_dir("load-cockpit");
+        std::fs::create_dir_all(&dir).unwrap();
+        let seed = app_with_root(dir.clone());
+        crate::cockpit::append_cockpit_event(&dir, "run", "task task-1 done", "/review").unwrap();
+
+        let app = WorkbenchApp::load(seed.profile, seed.config).unwrap();
+
+        assert!(
+            app.cockpit_journal.contains("Execution Cockpit"),
+            "{}",
+            app.cockpit_journal
+        );
+        assert!(
+            app.cockpit_journal.contains("task task-1 done"),
+            "{}",
+            app.cockpit_journal
+        );
+        let mut terminal = Terminal::new(TestBackend::new(120, 34)).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("Execution Cockpit"), "{text}");
+        assert!(text.contains("task task-1 done"), "{text}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn command_palette_runs_verify_gate() {
         let dir = temp_dir("verify-action");
         std::fs::create_dir_all(&dir).unwrap();
@@ -1900,6 +2052,11 @@ mod tests {
         assert_eq!(list_tasks(&dir).unwrap()[0].text, "fix flaky parser tests");
         assert!(app.status.contains("Queued task"), "{}", app.status);
         assert!(
+            app.cockpit_journal.contains("queued task"),
+            "{}",
+            app.cockpit_journal
+        );
+        assert!(
             app.workflow_status.contains("Phase: Task queued"),
             "{}",
             app.workflow_status
@@ -1980,6 +2137,16 @@ mod tests {
             app.terminal_log.join("\n").contains("$ test -f marker.txt"),
             "{:?}",
             app.terminal_log
+        );
+        assert!(
+            app.cockpit_journal.contains("Execution Cockpit"),
+            "{}",
+            app.cockpit_journal
+        );
+        assert!(
+            app.cockpit_journal.contains("1 check(s) passed"),
+            "{}",
+            app.cockpit_journal
         );
 
         let _ = std::fs::remove_dir_all(&dir);
