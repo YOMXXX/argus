@@ -1,4 +1,5 @@
-use argus_trace::{read_trace, EventKind};
+use argus_trace::{EventKind, TraceEvent};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 const PREVIEW_EVENT_LIMIT: usize = 12;
@@ -36,7 +37,7 @@ pub fn load_trace_preview(root: &Path, trace_path: Option<&Path>) -> TracePrevie
         };
     }
 
-    let events = match read_trace(&full_path) {
+    let events = match read_trace_preview_events(&full_path) {
         Ok(events) => events,
         Err(err) => {
             return TracePreview {
@@ -76,6 +77,23 @@ pub fn load_trace_preview(root: &Path, trace_path: Option<&Path>) -> TracePrevie
         headline,
         lines,
     }
+}
+
+fn read_trace_preview_events(path: &Path) -> anyhow::Result<Vec<TraceEvent>> {
+    let reader = BufReader::new(std::fs::File::open(path)?);
+    let mut events = Vec::new();
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<TraceEvent>(&line) {
+            Ok(event) => events.push(event),
+            Err(err) if err.is_eof() => break,
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Ok(events)
 }
 
 fn resolve_trace_path(root: &Path, trace_path: &Path) -> PathBuf {
@@ -144,6 +162,7 @@ fn truncate_chars(text: &str, max: usize) -> String {
 mod tests {
     use super::*;
     use argus_trace::{EventKind, TraceWriter};
+    use std::io::Write;
 
     fn temp_dir(name: &str) -> PathBuf {
         let nanos = std::time::SystemTime::now()
@@ -190,6 +209,38 @@ mod tests {
                 .lines
                 .iter()
                 .any(|line| line.contains("GATE") && line.contains("cargo test passed")),
+            "{preview:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_trace_preview_keeps_completed_events_when_live_tail_is_partial() {
+        let dir = temp_dir("partial");
+        let trace_path = dir.join(".argus/tasks/task-1.trace.jsonl");
+        std::fs::create_dir_all(trace_path.parent().unwrap()).unwrap();
+        let mut writer = TraceWriter::create(&trace_path).unwrap();
+        writer
+            .record(EventKind::TaskStarted {
+                task: "stream trace".into(),
+            })
+            .unwrap();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&trace_path)
+            .unwrap()
+            .write_all(br#"{"step":1,"ts_ms":0,"kind":{"type":"tool_call""#)
+            .unwrap();
+
+        let preview = load_trace_preview(&dir, Some(Path::new(".argus/tasks/task-1.trace.jsonl")));
+
+        assert_eq!(preview.headline, "1 events");
+        assert!(
+            preview
+                .lines
+                .iter()
+                .any(|line| line.contains("TASK") && line.contains("stream trace")),
             "{preview:?}"
         );
 

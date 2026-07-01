@@ -1041,6 +1041,7 @@ impl WorkbenchApp {
         let Ok(Some(run)) = load_background_run(&self.profile.root) else {
             return;
         };
+        self.refresh_background_trace_silent(&run);
         let marker = background_run_marker(&run);
         if self.background_run_seen.as_deref() == Some(marker.as_str()) {
             return;
@@ -1066,6 +1067,17 @@ impl WorkbenchApp {
                 self.status = format!("Background run failed: {}", run.task_id);
             }
             _ => {}
+        }
+    }
+
+    fn refresh_background_trace_silent(&mut self, run: &BackgroundRun) {
+        let Some(trace) = run.trace.clone() else {
+            return;
+        };
+        if matches!(run.status.as_str(), "running" | "canceling") {
+            self.latest_trace_path = Some(trace);
+            self.trace_preview =
+                load_trace_preview(&self.profile.root, self.latest_trace_path.as_deref());
         }
     }
 
@@ -1245,6 +1257,9 @@ impl WorkbenchApp {
         clear_background_cancel(&self.profile.root)?;
         self.background_output_seen = 0;
         let trace = PathBuf::from(".argus/tasks").join(format!("{}.trace.jsonl", task.id));
+        self.latest_trace_path = Some(trace.clone());
+        self.trace_preview =
+            load_trace_preview(&self.profile.root, self.latest_trace_path.as_deref());
         let state = record_background_run(
             &self.profile.root,
             &task.id,
@@ -3528,6 +3543,60 @@ mod tests {
 
         let terminal = app.terminal_log.join("\n");
         assert!(terminal.contains("[stdout] new run"), "{terminal}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tick_refreshes_running_background_trace_without_status_change() {
+        let dir = temp_dir("live-trace");
+        let trace_rel = PathBuf::from(".argus/tasks/live.trace.jsonl");
+        let trace_path = dir.join(&trace_rel);
+        std::fs::create_dir_all(trace_path.parent().unwrap()).unwrap();
+        let mut writer = TraceWriter::create(&trace_path).unwrap();
+        writer
+            .record(EventKind::TaskStarted {
+                task: "live tail trace".into(),
+            })
+            .unwrap();
+        crate::background::record_background_run(
+            &dir,
+            "task-live",
+            "running",
+            "task task-live running in background",
+            Some(trace_rel.clone()),
+        )
+        .unwrap();
+        let seed = app_with_root(dir.clone());
+        let mut app = WorkbenchApp::load(seed.profile, seed.config).unwrap();
+
+        app.tick();
+        assert_eq!(app.latest_trace_path, Some(trace_rel.clone()));
+        assert!(
+            app.trace_preview
+                .lines
+                .iter()
+                .any(|line| line.contains("live tail trace")),
+            "{:?}",
+            app.trace_preview
+        );
+
+        writer
+            .record(EventKind::ToolCall {
+                name: "shell".into(),
+                args: "{\"cmd\":\"cargo test\"}".into(),
+            })
+            .unwrap();
+        app.tick();
+
+        assert!(
+            app.trace_preview
+                .lines
+                .iter()
+                .any(|line| line.contains("TOOL") && line.contains("shell")),
+            "{:?}",
+            app.trace_preview
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
