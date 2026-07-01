@@ -1,4 +1,5 @@
 use anyhow::Result;
+use argus_cli::compatibility::render_agent_compatibility;
 use argus_cli::harness::{run_task_through_harness, HarnessRunOutput};
 use argus_cli::project::{detect_project, init_project, init_report_text};
 use argus_cli::sessions::list_sessions;
@@ -33,26 +34,32 @@ enum Commands {
     /// Print project detection and ArgusCode config status.
     Status,
     /// Open the full-screen ArgusCode Workbench TUI.
+    #[command(alias = "tui", alias = "ui")]
     Workbench,
     /// Open the coding chat/workbench, optionally queueing an initial task.
+    #[command(alias = "ask", alias = "code")]
     Chat {
         /// Initial task to place in the ArgusCode task queue.
         task: Option<String>,
     },
     /// Queue a task or list queued tasks.
+    #[command(alias = "add", alias = "todo")]
     Task {
         /// Task text to queue. Omit to list the queue.
         task: Option<String>,
     },
     /// Resume the latest queued task.
+    #[command(alias = "continue")]
     Resume {
         /// Execute the task through the Argus harness and write a trace.
         #[arg(long)]
         run: bool,
     },
     /// Run the configured project verification gate.
+    #[command(alias = "check", alias = "test")]
     Verify,
     /// Show or update the default model/provider profile.
+    #[command(alias = "model")]
     Provider {
         #[command(subcommand)]
         command: Option<ProviderCommands>,
@@ -60,6 +67,7 @@ enum Commands {
     /// List recorded ArgusCode task sessions.
     History,
     /// Check local project readiness for ArgusCode.
+    #[command(alias = "health", alias = "compat")]
     Doctor,
 }
 
@@ -357,6 +365,8 @@ fn doctor(cwd: &std::path::Path) -> Result<()> {
                 .join(", ")
         }
     );
+    println!();
+    println!("{}", render_agent_compatibility(&profile.root));
     Ok(())
 }
 

@@ -124,7 +124,7 @@ arguscode
 # Use /flow to see the current queue -> run -> verify -> review -> rework state.
 # The Terminal panel includes an Execution Cockpit journal for recent run/verify/review events.
 # The Terminal panel can run the configured verification gate from Ctrl+K.
-# The input box also supports slash commands such as /verify, /run, /route-run, /diff, and /history.
+# The input box also supports slash commands such as /ask, /check, /run, /route-run, /diff, and /history.
 # Switch models in-session with /provider deepseek deepseek-chat or /model <name>.
 # Manage the queue in-session with /tasks, /cancel <task-id>, and /retry <task-id>.
 # Tune execution safety with /sandbox read-only|workspace-write|trusted and /approval auto|ask.
@@ -143,6 +143,8 @@ arguscode task "fix the failing parser test"
 arguscode resume
 arguscode resume --run
 arguscode verify
+arguscode check
+arguscode health
 arguscode history
 
 # Use an OpenAI-compatible provider profile without writing keys to config.

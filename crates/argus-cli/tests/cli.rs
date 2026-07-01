@@ -248,6 +248,55 @@ fn arguscode_verify_runs_project_gate() {
 }
 
 #[test]
+fn arguscode_check_alias_runs_project_gate() {
+    let dir = std::env::temp_dir().join(format!("arguscode-check-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("package.json"),
+        "{\"scripts\":{\"test\":\"echo ok\"}}\n",
+    )
+    .unwrap();
+
+    let out = Command::new(arguscode_bin())
+        .arg("check")
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+
+    assert!(out.status.success(), "arguscode check failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("ArgusCode verify"), "stdout: {stdout}");
+    assert!(stdout.contains("verification passed"), "stdout: {stdout}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn arguscode_health_alias_reports_agent_compatibility() {
+    let dir = std::env::temp_dir().join(format!("arguscode-health-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join(".cursor/rules")).unwrap();
+    std::fs::write(dir.join("CLAUDE.md"), "claude rules\n").unwrap();
+    std::fs::write(dir.join(".cursor/rules/ui.mdc"), "cursor rules\n").unwrap();
+
+    let out = Command::new(arguscode_bin())
+        .arg("health")
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+
+    assert!(out.status.success(), "arguscode health failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("ArgusCode doctor"), "stdout: {stdout}");
+    assert!(stdout.contains("Agent compatibility"), "stdout: {stdout}");
+    assert!(stdout.contains("Claude Code"), "stdout: {stdout}");
+    assert!(stdout.contains("Cursor"), "stdout: {stdout}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn arguscode_provider_deepseek_updates_openai_compatible_config() {
     let dir = std::env::temp_dir().join(format!("arguscode-provider-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -934,6 +983,33 @@ fn run_auto_discovers_agents_md() {
     assert!(
         stderr.contains("AGENTS.md"),
         "should report loaded rules: {stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn run_auto_discovers_combined_agent_rules() {
+    let dir = std::env::temp_dir().join(format!("argus-combined-rules-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join(".cursor/rules")).unwrap();
+    std::fs::write(dir.join("CLAUDE.md"), "Prefer small diffs.").unwrap();
+    std::fs::write(dir.join(".cursor/rules/backend.mdc"), "Keep APIs stable.").unwrap();
+    let trace = dir.join("t.jsonl");
+
+    let run = Command::new(bin())
+        .args(["run", "do x", "--trace"])
+        .arg(&trace)
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+
+    assert!(run.status.success(), "run failed: {run:?}");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(stderr.contains("CLAUDE.md"), "stderr: {stderr}");
+    assert!(
+        stderr.contains(".cursor/rules/backend.mdc"),
+        "stderr: {stderr}"
     );
 
     let _ = std::fs::remove_dir_all(&dir);

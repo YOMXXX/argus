@@ -1,3 +1,4 @@
+use crate::compatibility::detect_rule_files;
 use crate::config::{
     ArgusCodeConfig, MemoryConfig, ProjectConfig, ProviderConfig, RulesConfig, SecurityConfig,
     UiConfig, VerifyConfig, ARGUS_DIR, PROJECT_MEMORY_PATH, SMOKE_EVAL_PATH,
@@ -123,24 +124,7 @@ fn detect_node_verify_command(root: &Path) -> String {
 }
 
 fn detect_rules_files(root: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    for rel in ["AGENTS.md", "CLAUDE.md", ".cursorrules"] {
-        if root.join(rel).exists() {
-            files.push(PathBuf::from(rel));
-        }
-    }
-    let cursor_rules = root.join(".cursor/rules");
-    if let Ok(entries) = std::fs::read_dir(cursor_rules) {
-        let mut paths = entries
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.is_file())
-            .filter_map(|path| path.strip_prefix(root).ok().map(Path::to_path_buf))
-            .collect::<Vec<_>>();
-        paths.sort();
-        files.extend(paths);
-    }
-    files
+    detect_rule_files(root)
 }
 
 fn find_project_root(start: &Path) -> Result<PathBuf> {
@@ -353,6 +337,39 @@ mod tests {
             .verify_commands
             .contains(&"cargo test --workspace --locked".into()));
         assert!(profile.rules_files.contains(&PathBuf::from("AGENTS.md")));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn detects_cross_agent_rule_files() {
+        let dir = temp_dir("detect-agent-rules");
+        std::fs::create_dir_all(dir.join(".cursor/rules")).unwrap();
+        std::fs::write(dir.join("AGENTS.md"), "codex rules").unwrap();
+        std::fs::write(dir.join("CLAUDE.md"), "claude rules").unwrap();
+        std::fs::write(dir.join(".cursorrules"), "cursor legacy rules").unwrap();
+        std::fs::write(dir.join(".cursor/rules/frontend.mdc"), "cursor rules").unwrap();
+        std::fs::write(dir.join("GEMINI.md"), "gemini rules").unwrap();
+        std::fs::write(dir.join("KIMI.md"), "kimi rules").unwrap();
+        std::fs::write(dir.join("MIMO.md"), "mimo rules").unwrap();
+
+        let profile = detect_project(&dir).unwrap();
+
+        for expected in [
+            "AGENTS.md",
+            "CLAUDE.md",
+            ".cursorrules",
+            ".cursor/rules/frontend.mdc",
+            "GEMINI.md",
+            "KIMI.md",
+            "MIMO.md",
+        ] {
+            assert!(
+                profile.rules_files.contains(&PathBuf::from(expected)),
+                "missing {expected}: {:?}",
+                profile.rules_files
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }

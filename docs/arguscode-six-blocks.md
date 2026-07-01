@@ -36,6 +36,7 @@ Make users from popular coding agents feel at home.
 - Slash command aliases for Claude Code, Codex, Aider, KimiCode, and MiMoCode habits.
 - Rules import normalization for `AGENTS.md`, `CLAUDE.md`, Cursor rules, and related project instructions.
 - `arguscode doctor` compatibility report with migration suggestions.
+- First slice: `arguscode check/health`, Workbench `/ask` and `/check`, combined multi-agent rule import, and compatibility reporting.
 
 ## Block 4: Planning Engine
 

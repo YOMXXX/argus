@@ -248,22 +248,7 @@ impl WorkbenchApp {
             self.input.clear();
             self.execute_slash_command(&task);
         } else {
-            match queue_task(&self.profile.root, &task) {
-                Ok(record) => {
-                    self.status = format!("Queued task {}: {}", record.id, record.text);
-                    self.task_queue.push(record);
-                    self.record_cockpit_event(
-                        "queue",
-                        &format!("queued task: {task}"),
-                        "/run or /route-run",
-                    );
-                    self.refresh_workflow_status_silent();
-                    self.input.clear();
-                }
-                Err(err) => {
-                    self.status = format!("Could not queue task: {err}");
-                }
-            }
+            self.queue_task_text(&task);
         }
     }
 
@@ -355,12 +340,13 @@ impl WorkbenchApp {
         let command = parts.next().unwrap_or_default();
         let args = parts.collect::<Vec<_>>();
         match command {
-            "/verify" => {
+            "/verify" | "/check" | "/test" => {
                 if let Err(err) = self.run_verify_gate() {
                     self.status = format!("Verification failed: {err}");
                 }
             }
-            "/run" | "/resume" => {
+            "/ask" | "/add" | "/code" => self.queue_task_text(&args.join(" ")),
+            "/run" | "/resume" | "/continue" => {
                 if let Err(err) = self.run_latest_task_with(task_runner) {
                     self.active_pane = WorkbenchPane::Terminal;
                     self.status = format!("Harness run failed: {err}");
@@ -368,7 +354,7 @@ impl WorkbenchApp {
                 }
             }
             "/diff" => self.refresh_diff_preview(),
-            "/flow" => self.refresh_workflow_status(),
+            "/flow" | "/status" => self.refresh_workflow_status(),
             "/review" | "/patch" => self.refresh_change_review(),
             "/accept" => self.accept_change_review(&args.join(" ")),
             "/rework" => self.queue_rework_task(&args.join(" ")),
@@ -446,6 +432,30 @@ impl WorkbenchApp {
                 self.status = format!(
                     "Unknown slash command: {command}. Try /help, /verify, /run, /eval-run, /flow."
                 );
+            }
+        }
+    }
+
+    fn queue_task_text(&mut self, task: &str) {
+        let task = task.trim();
+        if task.is_empty() {
+            self.status = "Enter a task to start an ArgusCode session.".into();
+            return;
+        }
+        match queue_task(&self.profile.root, task) {
+            Ok(record) => {
+                self.status = format!("Queued task {}: {}", record.id, record.text);
+                self.task_queue.push(record);
+                self.record_cockpit_event(
+                    "queue",
+                    &format!("queued task: {task}"),
+                    "/run or /route-run",
+                );
+                self.refresh_workflow_status_silent();
+                self.input.clear();
+            }
+            Err(err) => {
+                self.status = format!("Could not queue task: {err}");
             }
         }
     }
@@ -1665,7 +1675,12 @@ Harness flow\n\
 plan -> edit -> verify -> repair -> trace\n\n\
 Slash commands\n\
 /verify  Run verification gate\n\
+/check   Run verification gate\n\
+/ask     Queue a task from a familiar agent-style prompt\n\
+/add     Queue a task\n\
+/code    Queue a coding task\n\
 /run     Run latest queued task\n\
+/continue Run latest queued task\n\
 /route-run Route latest task through cheap/strong models\n\
 /map     Refresh repo map\n\
 /evals   Refresh eval dashboard\n\
@@ -1674,6 +1689,7 @@ Slash commands\n\
 /cancel  Cancel a task by id\n\
 /retry   Requeue a task by id\n\
 /flow    Refresh workflow status\n\
+/status  Refresh workflow status\n\
 /diff    Refresh diff preview\n\
 /review  Refresh change review\n\
 /patch   Refresh patch review\n\
@@ -2149,6 +2165,53 @@ mod tests {
             "{}",
             app.cockpit_journal
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_check_runs_verify_alias_without_queueing_task() {
+        let dir = temp_dir("slash-check");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("marker.txt"), "ok\n").unwrap();
+        let mut app = app_with_root(dir.clone());
+        app.config.verify.commands = vec!["test -f marker.txt".into()];
+
+        for c in "/check".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert!(app.task_queue.is_empty(), "{:?}", app.task_queue);
+        assert!(list_tasks(&dir).unwrap().is_empty());
+        assert_eq!(app.active_pane, WorkbenchPane::Terminal);
+        assert!(app.status.contains("Verification passed"), "{}", app.status);
+        assert!(
+            app.terminal_log.join("\n").contains("$ test -f marker.txt"),
+            "{:?}",
+            app.terminal_log
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_ask_queues_task_alias() {
+        let dir = temp_dir("slash-ask");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = app_with_root(dir.clone());
+
+        for c in "/ask fix the parser".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert_eq!(app.task_queue.len(), 1, "{:?}", app.task_queue);
+        assert_eq!(app.task_queue[0].text, "fix the parser");
+        assert!(app.status.contains("Queued task"), "{}", app.status);
+        let tasks = list_tasks(&dir).unwrap();
+        assert_eq!(tasks.len(), 1, "{tasks:?}");
+        assert_eq!(tasks[0].text, "fix the parser");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

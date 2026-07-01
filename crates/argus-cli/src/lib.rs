@@ -1,5 +1,6 @@
 pub mod checkpoints;
 pub mod cockpit;
+pub mod compatibility;
 pub mod config;
 pub mod diff;
 pub mod eval_dashboard;

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use argus_cli::compatibility::load_auto_rules;
 use argus_cli::tui;
 use argus_core::{
     mcp_connect, run_suite_with_options, run_with_escalation, Approver, CommandVerifier,
@@ -242,19 +243,6 @@ impl Approver for StdinApprover {
     }
 }
 
-/// 自动发现工作目录的规则文件(AGENTS.md 优先,其次 CLAUDE.md),返回 (文件名, 内容)。
-fn discover_rules(dir: &Path) -> Option<(String, String)> {
-    for name in ["AGENTS.md", "CLAUDE.md"] {
-        let p = dir.join(name);
-        if let Ok(content) = std::fs::read_to_string(&p) {
-            if !content.trim().is_empty() {
-                return Some((name.to_string(), content));
-            }
-        }
-    }
-    None
-}
-
 /// 解析最终的 system prompt:--no-rules 关闭;--rules <file> 显式;否则自动发现。
 /// 加载成功时往 stderr 打印来源(便于用户确认)。
 fn resolve_rules(rules: Option<&Path>, no_rules: bool) -> Result<Option<String>> {
@@ -267,10 +255,16 @@ fn resolve_rules(rules: Option<&Path>, no_rules: bool) -> Result<Option<String>>
         eprintln!("(loaded rules from {})", file.display());
         return Ok(Some(content));
     }
-    match discover_rules(Path::new(".")) {
-        Some((name, content)) => {
-            eprintln!("(loaded rules from {name})");
-            Ok(Some(content))
+    match load_auto_rules(Path::new("."))? {
+        Some(loaded) => {
+            let files = loaded
+                .files
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            eprintln!("(loaded rules from {files})");
+            Ok(Some(loaded.prompt))
         }
         None => Ok(None),
     }
