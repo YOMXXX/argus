@@ -44,7 +44,13 @@ enum Commands {
         task: Option<String>,
     },
     /// Queue a task or list queued tasks.
-    #[command(alias = "add", alias = "todo")]
+    #[command(
+        alias = "add",
+        alias = "todo",
+        alias = "fix",
+        alias = "edit",
+        alias = "implement"
+    )]
     Task {
         /// Task text to queue. Omit to list the queue.
         task: Option<String>,

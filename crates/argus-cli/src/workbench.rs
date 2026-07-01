@@ -5,6 +5,7 @@ use crate::background::{
 };
 use crate::checkpoints::{create_checkpoint, latest_checkpoint, restore_checkpoint};
 use crate::cockpit::{append_cockpit_event, load_cockpit_journal};
+use crate::compatibility::render_agent_compatibility;
 use crate::config::{ArgusCodeConfig, CONFIG_PATH, SMOKE_EVAL_PATH};
 use crate::diff::load_diff_preview;
 use crate::eval_dashboard::load_eval_dashboard;
@@ -386,7 +387,9 @@ impl WorkbenchApp {
                     }
                 }
             }
-            "/ask" | "/add" | "/code" => self.queue_task_text(&args.join(" ")),
+            "/ask" | "/add" | "/code" | "/edit" | "/fix" | "/implement" | "/prompt" => {
+                self.queue_task_text(&args.join(" "))
+            }
             "/run" | "/resume" | "/continue" => {
                 if let Err(err) = self.run_latest_task_with(task_runner) {
                     self.active_pane = WorkbenchPane::Terminal;
@@ -396,10 +399,13 @@ impl WorkbenchApp {
             }
             "/diff" => self.refresh_diff_preview(),
             "/flow" | "/status" => self.refresh_workflow_status(),
+            "/logs" | "/terminal" | "/output" => self.open_terminal_logs(),
+            "/trace" | "/timeline" => self.open_trace_timeline(),
             "/plan" => self.create_work_plan(&args.join(" ")),
             "/next" => self.queue_next_plan_step(),
             "/done" => self.complete_plan_step(&args.join(" ")),
             "/launch" | "/readiness" => self.show_launch_readiness(),
+            "/doctor" | "/health" | "/compat" => self.show_agent_compatibility(),
             "/review" | "/patch" => self.refresh_change_review(),
             "/accept" => self.accept_change_review(&args.join(" ")),
             "/rework" => self.queue_rework_task(&args.join(" ")),
@@ -1019,6 +1025,24 @@ impl WorkbenchApp {
                 self.status = format!("Could not refresh workflow status: {err}");
             }
         }
+    }
+
+    fn open_terminal_logs(&mut self) {
+        self.active_pane = WorkbenchPane::Terminal;
+        self.status = "Terminal logs opened.".into();
+    }
+
+    fn open_trace_timeline(&mut self) {
+        self.active_pane = WorkbenchPane::Trace;
+        self.trace_preview =
+            load_trace_preview(&self.profile.root, self.latest_trace_path.as_deref());
+        self.status = "Trace timeline opened.".into();
+    }
+
+    fn show_agent_compatibility(&mut self) {
+        self.active_pane = WorkbenchPane::Terminal;
+        self.terminal_log = vec![render_agent_compatibility(&self.profile.root)];
+        self.status = "Agent compatibility opened.".into();
     }
 
     fn refresh_workflow_status_silent(&mut self) {
@@ -2127,13 +2151,21 @@ Slash commands\n\
 /ask     Queue a task from a familiar agent-style prompt\n\
 /add     Queue a task\n\
 /code    Queue a coding task\n\
+/edit    Queue a coding task\n\
+/fix     Queue a fix task\n\
+/implement Queue an implementation task\n\
 /run     Run latest queued task\n\
 /continue Run latest queued task\n\
 /stop    Stop active background run\n\
+/logs    Open terminal output\n\
+/trace   Open trace timeline\n\
 /route-run Route latest task through cheap/strong models\n\
 /map     Refresh repo map\n\
 /evals   Refresh eval dashboard\n\
 /eval-run Run smoke eval or a suite path\n\
+/doctor  Show agent compatibility\n\
+/health  Show agent compatibility\n\
+/compat  Show agent compatibility\n\
 /tasks   Show task queue\n\
 /cancel  Cancel a task by id\n\
 /retry   Requeue a task by id\n\
@@ -2775,6 +2807,90 @@ mod tests {
         assert_eq!(tasks[0].text, "fix the parser");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_agent_coding_aliases_queue_tasks() {
+        for alias in ["/edit", "/fix", "/implement"] {
+            let dir = temp_dir(&format!("slash-agent-alias-{}", &alias[1..]));
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut app = app_with_root(dir.clone());
+            let command = format!("{alias} improve the login form");
+
+            for c in command.chars() {
+                handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+            }
+            handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+            assert_eq!(app.task_queue.len(), 1, "{alias}: {:?}", app.task_queue);
+            assert_eq!(app.task_queue[0].text, "improve the login form");
+            assert!(
+                app.status.contains("Queued task"),
+                "{alias}: {}",
+                app.status
+            );
+            let tasks = list_tasks(&dir).unwrap();
+            assert_eq!(tasks.len(), 1, "{alias}: {tasks:?}");
+            assert_eq!(tasks[0].text, "improve the login form");
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn slash_doctor_health_compat_show_agent_compatibility() {
+        for alias in ["/doctor", "/health", "/compat"] {
+            let dir = temp_dir(&format!("slash-{}", &alias[1..]));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("CLAUDE.md"), "claude rules\n").unwrap();
+            std::fs::write(dir.join(".aider.conf.yml"), "model: test\n").unwrap();
+            let mut app = app_with_root(dir.clone());
+
+            for c in alias.chars() {
+                handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+            }
+            handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+            let terminal = app.terminal_log.join("\n");
+            assert_eq!(app.active_pane, WorkbenchPane::Terminal, "{alias}");
+            assert!(
+                terminal.contains("Agent compatibility"),
+                "{alias}: {terminal}"
+            );
+            assert!(terminal.contains("Claude Code"), "{alias}: {terminal}");
+            assert!(
+                terminal.contains("Aider config detected"),
+                "{alias}: {terminal}"
+            );
+            assert!(
+                app.status.contains("Agent compatibility"),
+                "{alias}: {}",
+                app.status
+            );
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn slash_logs_and_trace_focus_familiar_views() {
+        let dir = temp_dir("slash-views");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = app_with_root(dir);
+
+        for c in "/logs".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+        assert_eq!(app.active_pane, WorkbenchPane::Terminal);
+        assert!(app.status.contains("Terminal"), "{}", app.status);
+
+        for c in "/trace".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+        assert_eq!(app.active_pane, WorkbenchPane::Trace);
+        assert!(app.status.contains("Trace"), "{}", app.status);
     }
 
     #[test]

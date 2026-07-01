@@ -297,6 +297,33 @@ fn arguscode_health_alias_reports_agent_compatibility() {
 }
 
 #[test]
+fn arguscode_fix_edit_implement_aliases_queue_tasks() {
+    for alias in ["fix", "edit", "implement"] {
+        let dir = std::env::temp_dir().join(format!("arguscode-{alias}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let out = Command::new(arguscode_bin())
+            .args([alias, "improve parser diagnostics"])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+
+        assert!(out.status.success(), "arguscode {alias} failed: {out:?}");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains("Queued task"), "{alias} stdout: {stdout}");
+        assert!(
+            stdout.contains("improve parser diagnostics"),
+            "{alias} stdout: {stdout}"
+        );
+        let queue = std::fs::read_to_string(dir.join(".argus/tasks/queue.jsonl")).unwrap();
+        assert!(queue.contains("improve parser diagnostics"), "{queue}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[test]
 fn arguscode_provider_deepseek_updates_openai_compatible_config() {
     let dir = std::env::temp_dir().join(format!("arguscode-provider-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
