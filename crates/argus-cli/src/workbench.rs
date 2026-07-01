@@ -13,6 +13,7 @@ use crate::sessions::{list_sessions, SessionRecord};
 use crate::tasks::{latest_resumable_task, list_tasks, queue_task, update_task_status, TaskRecord};
 use crate::trace_view::{load_trace_preview, TracePreview};
 use crate::verify::run_configured_verify;
+use crate::workflow::load_workflow_status;
 use anyhow::Result;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::crossterm::execute;
@@ -48,6 +49,7 @@ enum PaletteAction {
     Memory,
     History,
     RefreshDiff,
+    RefreshFlow,
     SmokeEval,
     NewTask,
 }
@@ -86,6 +88,11 @@ const PALETTE_ITEMS: &[PaletteItem] = &[
         detail: "Reload git status and diff summary into the session panel",
     },
     PaletteItem {
+        action: PaletteAction::RefreshFlow,
+        label: "Refresh workflow status",
+        detail: "Show the current queue, run, verify, review, and next action",
+    },
+    PaletteItem {
         action: PaletteAction::SmokeEval,
         label: "Open smoke eval",
         detail: "Prepare the generated .argus/evals/smoke.json suite",
@@ -108,6 +115,7 @@ pub struct WorkbenchApp {
     pub session_history: Vec<SessionRecord>,
     pub diff_preview: String,
     pub change_review: String,
+    pub workflow_status: String,
     pub trace_preview: TracePreview,
     pub repo_map: String,
     pub eval_dashboard: String,
@@ -123,6 +131,7 @@ struct WorkbenchLoadedData {
     session_history: Vec<SessionRecord>,
     diff_preview: String,
     change_review: String,
+    workflow_status: String,
     trace_preview: TracePreview,
     repo_map: String,
     eval_dashboard: String,
@@ -139,6 +148,7 @@ impl WorkbenchApp {
                 session_history: Vec::new(),
                 diff_preview: "(not loaded)".into(),
                 change_review: "(not loaded)".into(),
+                workflow_status: "(not loaded)".into(),
                 trace_preview: TracePreview::empty(),
                 repo_map: "(not loaded)".into(),
                 eval_dashboard: "(not loaded)".into(),
@@ -152,6 +162,7 @@ impl WorkbenchApp {
         let session_history = list_sessions(&profile.root)?;
         let diff_preview = load_diff_preview(&profile.root)?;
         let change_review = load_change_review(&profile.root)?;
+        let workflow_status = load_workflow_status(&profile.root, &config.verify.commands)?;
         let latest_trace_path = session_history.last().map(|session| session.trace.clone());
         let trace_preview = load_trace_preview(&profile.root, latest_trace_path.as_deref());
         let repo_map = load_repo_map(&profile.root, &profile, &config)?;
@@ -165,6 +176,7 @@ impl WorkbenchApp {
                 session_history,
                 diff_preview,
                 change_review,
+                workflow_status,
                 trace_preview,
                 repo_map,
                 eval_dashboard,
@@ -192,6 +204,7 @@ impl WorkbenchApp {
             session_history: data.session_history,
             diff_preview: data.diff_preview,
             change_review: data.change_review,
+            workflow_status: data.workflow_status,
             trace_preview: data.trace_preview,
             repo_map: data.repo_map,
             eval_dashboard: data.eval_dashboard,
@@ -232,6 +245,7 @@ impl WorkbenchApp {
                 Ok(record) => {
                     self.status = format!("Queued task {}: {}", record.id, record.text);
                     self.task_queue.push(record);
+                    self.refresh_workflow_status_silent();
                     self.input.clear();
                 }
                 Err(err) => {
@@ -293,6 +307,9 @@ impl WorkbenchApp {
             PaletteAction::RefreshDiff => {
                 self.refresh_diff_preview();
             }
+            PaletteAction::RefreshFlow => {
+                self.refresh_workflow_status();
+            }
             PaletteAction::SmokeEval => {
                 self.active_pane = WorkbenchPane::Trace;
                 self.status = "Smoke eval ready: argus eval .argus/evals/smoke.json".into();
@@ -339,6 +356,7 @@ impl WorkbenchApp {
                 }
             }
             "/diff" => self.refresh_diff_preview(),
+            "/flow" => self.refresh_workflow_status(),
             "/review" => self.refresh_change_review(),
             "/accept" => self.accept_change_review(&args.join(" ")),
             "/rework" => self.queue_rework_task(&args.join(" ")),
@@ -414,7 +432,7 @@ impl WorkbenchApp {
             }
             _ => {
                 self.status = format!(
-                    "Unknown slash command: {command}. Try /help, /verify, /run, /eval-run, /diff."
+                    "Unknown slash command: {command}. Try /help, /verify, /run, /eval-run, /flow."
                 );
             }
         }
@@ -571,6 +589,9 @@ impl WorkbenchApp {
             Ok(record) => {
                 self.diff_preview = load_diff_preview(&self.profile.root)
                     .unwrap_or_else(|err| format!("Could not refresh diff: {err}"));
+                self.change_review = load_change_review(&self.profile.root)
+                    .unwrap_or_else(|err| format!("Could not refresh change review: {err}"));
+                self.refresh_workflow_status_silent();
                 self.repo_map = load_repo_map(&self.profile.root, &self.profile, &self.config)
                     .unwrap_or_else(|err| format!("Could not refresh repo map: {err}"));
                 self.terminal_log = vec![
@@ -649,6 +670,7 @@ impl WorkbenchApp {
                         .map(|task| format!("[{}] {}  {}", task.status, task.id, task.text))
                         .collect()
                 };
+                self.refresh_workflow_status_silent();
                 self.status = format!("Task queue opened: {} task(s)", self.task_queue.len());
             }
             Err(err) => {
@@ -704,6 +726,7 @@ impl WorkbenchApp {
                         return;
                     }
                 }
+                self.refresh_workflow_status_silent();
                 self.status = format!("{label}: {}", task.id);
             }
             Ok(None) => {
@@ -817,6 +840,7 @@ impl WorkbenchApp {
         match load_diff_preview(&self.profile.root) {
             Ok(preview) => {
                 self.diff_preview = preview;
+                self.refresh_workflow_status_silent();
                 self.status = "Diff preview refreshed.".into();
             }
             Err(err) => {
@@ -825,11 +849,31 @@ impl WorkbenchApp {
         }
     }
 
+    fn refresh_workflow_status(&mut self) {
+        self.active_pane = WorkbenchPane::Session;
+        match load_workflow_status(&self.profile.root, &self.config.verify.commands) {
+            Ok(status) => {
+                self.workflow_status = status;
+                self.status = "Workflow status refreshed.".into();
+            }
+            Err(err) => {
+                self.status = format!("Could not refresh workflow status: {err}");
+            }
+        }
+    }
+
+    fn refresh_workflow_status_silent(&mut self) {
+        if let Ok(status) = load_workflow_status(&self.profile.root, &self.config.verify.commands) {
+            self.workflow_status = status;
+        }
+    }
+
     fn refresh_change_review(&mut self) {
         self.active_pane = WorkbenchPane::Session;
         match load_change_review(&self.profile.root) {
             Ok(review) => {
                 self.change_review = review;
+                self.refresh_workflow_status_silent();
                 self.status = "Change review refreshed.".into();
             }
             Err(err) => {
@@ -844,6 +888,7 @@ impl WorkbenchApp {
             Ok(record) => {
                 self.change_review = load_change_review(&self.profile.root)
                     .unwrap_or_else(|err| format!("Could not refresh change review: {err}"));
+                self.refresh_workflow_status_silent();
                 self.terminal_log = vec![
                     format!("decision: {}", record.decision),
                     format!("note: {}", record.note),
@@ -868,6 +913,7 @@ impl WorkbenchApp {
                 self.active_pane = WorkbenchPane::Session;
                 self.task_queue.push(record.clone());
                 let _ = record_review_decision(&self.profile.root, "rework", task);
+                self.refresh_workflow_status_silent();
                 self.status = format!("Rework queued: {}", record.id);
             }
             Err(err) => {
@@ -919,6 +965,8 @@ impl WorkbenchApp {
                     .or_else(|| Some(output.trace.clone()));
                 self.diff_preview = load_diff_preview(&self.profile.root)?;
                 self.change_review = load_change_review(&self.profile.root)?;
+                self.workflow_status =
+                    load_workflow_status(&self.profile.root, &self.config.verify.commands)?;
                 self.trace_preview =
                     load_trace_preview(&self.profile.root, self.latest_trace_path.as_deref());
                 self.status = format!("Task {} {}", output.task_id, output.status);
@@ -933,6 +981,8 @@ impl WorkbenchApp {
                     .map(|session| session.trace.clone());
                 self.diff_preview = load_diff_preview(&self.profile.root)?;
                 self.change_review = load_change_review(&self.profile.root)?;
+                self.workflow_status =
+                    load_workflow_status(&self.profile.root, &self.config.verify.commands)?;
                 self.trace_preview =
                     load_trace_preview(&self.profile.root, self.latest_trace_path.as_deref());
                 self.status = format!("Harness run failed: {err}");
@@ -976,6 +1026,8 @@ impl WorkbenchApp {
             .push(format!("report: {}", output.report_json.display()));
         self.eval_dashboard = load_eval_dashboard(&self.profile.root)?;
         self.change_review = load_change_review(&self.profile.root)?;
+        self.workflow_status =
+            load_workflow_status(&self.profile.root, &self.config.verify.commands)?;
         self.status = if output.status == "passed" {
             format!("Eval passed: {}", output.suite.display())
         } else {
@@ -1041,6 +1093,8 @@ impl WorkbenchApp {
                     .or_else(|| Some(output.trace.clone()));
                 self.diff_preview = load_diff_preview(&self.profile.root)?;
                 self.change_review = load_change_review(&self.profile.root)?;
+                self.workflow_status =
+                    load_workflow_status(&self.profile.root, &self.config.verify.commands)?;
                 self.trace_preview =
                     load_trace_preview(&self.profile.root, self.latest_trace_path.as_deref());
                 self.status = format!(
@@ -1058,6 +1112,8 @@ impl WorkbenchApp {
                     .map(|session| session.trace.clone());
                 self.diff_preview = load_diff_preview(&self.profile.root)?;
                 self.change_review = load_change_review(&self.profile.root)?;
+                self.workflow_status =
+                    load_workflow_status(&self.profile.root, &self.config.verify.commands)?;
                 self.trace_preview =
                     load_trace_preview(&self.profile.root, self.latest_trace_path.as_deref());
                 self.status = format!("Route run failed: {err}");
@@ -1084,10 +1140,12 @@ impl WorkbenchApp {
         self.terminal_log.push(output.detail.clone());
         if output.passed {
             self.terminal_log.push("verification passed".into());
+            self.refresh_workflow_status_silent();
             self.status = format!("Verification passed: {} command(s)", output.commands.len());
             Ok(())
         } else {
             self.terminal_log.push("verification failed".into());
+            self.refresh_workflow_status_silent();
             self.status = "Verification failed.".into();
             anyhow::bail!(output.detail)
         }
@@ -1319,7 +1377,7 @@ fn render_session(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
         app.task_queue
             .iter()
             .rev()
-            .take(5)
+            .take(3)
             .map(|task| format!("[{}] {}  {}", task.status, task.id, task.text))
             .collect::<Vec<_>>()
             .join("\n")
@@ -1327,25 +1385,38 @@ fn render_session(f: &mut Frame, app: &WorkbenchApp, area: Rect) {
     let review_loop = app
         .change_review
         .lines()
-        .take(14)
+        .take(7)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let workflow_status = app
+        .workflow_status
+        .lines()
+        .take(7)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let diff_preview = app
+        .diff_preview
+        .lines()
+        .take(10)
         .collect::<Vec<_>>()
         .join("\n");
     let text = format!(
-        "Chat\n> {}\n\nTask Queue\n{}\n\nPlan\n1. Understand the request and repo rules.\n2. Edit through the harness.\n3. Run verification gate.\n4. Record trace and summarize evidence.\n\nReview Loop\n{}\n\nDiff Preview\n{}\n\nVerify Profile\n{}",
+        "Chat\n> {}\n\n{}\n\nTask Queue\n{}\n\nDiff Preview\n{}\n\nReview Loop\n{}\n\nPlan: understand -> edit -> verify -> review\n\nVerify Profile\n{}",
         if app.input.is_empty() {
             "Type a task here, then press Enter.".to_string()
         } else {
             app.input.clone()
         },
+        workflow_status,
         queue,
+        diff_preview,
         review_loop,
-        app.diff_preview,
         verify
     );
     f.render_widget(
         Paragraph::new(text)
             .block(panel_block(
-                "Conversation / Plan / Review",
+                "Conversation / Flow / Diff",
                 app.active_pane == WorkbenchPane::Session,
             ))
             .wrap(Wrap { trim: false }),
@@ -1484,6 +1555,7 @@ Slash commands\n\
 /tasks   Show task queue\n\
 /cancel  Cancel a task by id\n\
 /retry   Requeue a task by id\n\
+/flow    Refresh workflow status\n\
 /diff    Refresh diff preview\n\
 /review  Refresh change review\n\
 /accept  Record accepted review decision\n\
@@ -1615,6 +1687,40 @@ mod tests {
         assert!(text.contains("Trace"), "{text}");
         assert!(text.contains("Terminal"), "{text}");
         assert!(text.contains("cargo test"), "{text}");
+    }
+
+    #[test]
+    fn workbench_loads_and_renders_workflow_status() {
+        let dir = temp_dir("load-workflow");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let seed = app_with_root(dir.clone());
+        queue_task(&dir, "tighten workflow status").unwrap();
+
+        let app = WorkbenchApp::load(seed.profile, seed.config).unwrap();
+
+        assert!(
+            app.workflow_status.contains("Phase: Task queued"),
+            "{}",
+            app.workflow_status
+        );
+        let mut terminal = Terminal::new(TestBackend::new(120, 32)).unwrap();
+        terminal.draw(|f| ui(f, &app)).unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(text.contains("Workflow Status"), "{text}");
+        assert!(text.contains("tighten workflow status"), "{text}");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1793,6 +1899,11 @@ mod tests {
         assert_eq!(app.task_queue.len(), 1);
         assert_eq!(list_tasks(&dir).unwrap()[0].text, "fix flaky parser tests");
         assert!(app.status.contains("Queued task"), "{}", app.status);
+        assert!(
+            app.workflow_status.contains("Phase: Task queued"),
+            "{}",
+            app.workflow_status
+        );
 
         let mut terminal = Terminal::new(TestBackend::new(120, 32)).unwrap();
         terminal.draw(|f| ui(f, &app)).unwrap();
@@ -1804,6 +1915,46 @@ mod tests {
             .map(|c| c.symbol())
             .collect();
         assert!(text.contains("fix flaky parser tests"), "{text}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_flow_refreshes_workflow_status_without_queueing_task() {
+        let dir = temp_dir("slash-flow");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        let mut app = app_with_root(dir.clone());
+        app.workflow_status = "stale".into();
+        std::fs::write(dir.join("flow.txt"), "flow\n").unwrap();
+
+        for c in "/flow".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert!(app.task_queue.is_empty(), "{:?}", app.task_queue);
+        assert!(list_tasks(&dir).unwrap().is_empty());
+        assert_eq!(app.active_pane, WorkbenchPane::Session);
+        assert!(
+            app.status.contains("Workflow status refreshed"),
+            "{}",
+            app.status
+        );
+        assert!(
+            app.workflow_status.contains("Phase: Review needed"),
+            "{}",
+            app.workflow_status
+        );
+        assert!(
+            app.workflow_status.contains("Workspace: 1 changed path(s)"),
+            "{}",
+            app.workflow_status
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -67,6 +67,33 @@ pub fn record_review_decision(root: &Path, decision: &str, note: &str) -> Result
         .open(path)?;
     file.write_all(line.as_bytes())?;
     Ok(record)
+}
+
+pub fn review_decisions_path(root: &Path) -> PathBuf {
+    root.join(DECISIONS_FILE)
+}
+
+pub fn list_review_decisions(root: &Path) -> Result<Vec<ReviewDecision>> {
+    let path = review_decisions_path(root);
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let text = std::fs::read_to_string(&path)?;
+    let mut records = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let record: ReviewDecision = serde_json::from_str(line).map_err(|e| {
+            anyhow::anyhow!(
+                "invalid review decision line {} in {}: {e}",
+                index + 1,
+                path.display()
+            )
+        })?;
+        records.push(record);
+    }
+    Ok(records)
 }
 
 fn run_git<const N: usize>(root: &Path, args: [&str; N]) -> Result<String> {
@@ -139,9 +166,26 @@ mod tests {
 
         assert_eq!(record.decision, "accepted");
         assert_eq!(record.note, "ship it");
-        let text = std::fs::read_to_string(dir.join(".argus/reviews/decisions.jsonl")).unwrap();
+        let text = std::fs::read_to_string(super::review_decisions_path(&dir)).unwrap();
         assert!(text.contains("\"decision\":\"accepted\""), "{text}");
         assert!(text.contains("\"note\":\"ship it\""), "{text}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn list_review_decisions_reads_jsonl_records() {
+        let dir = temp_dir("list");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        super::record_review_decision(&dir, "accepted", "ship it").unwrap();
+        super::record_review_decision(&dir, "rework", "tighten tests").unwrap();
+
+        let records = super::list_review_decisions(&dir).unwrap();
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].decision, "accepted");
+        assert_eq!(records[1].decision, "rework");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

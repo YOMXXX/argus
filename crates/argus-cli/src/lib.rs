@@ -15,3 +15,4 @@ pub mod trace_view;
 pub mod tui;
 pub mod verify;
 pub mod workbench;
+pub mod workflow;
