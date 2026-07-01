@@ -54,6 +54,7 @@ Make failures productive by default.
 - Failure classifier for verify/eval/harness errors.
 - Automatic repair task generation with trace and failing command context.
 - Eval and verify results linked back into workflow status.
+- First slice: verify failures are classified and automatically queued as repair tasks from the Workbench.
 
 ## Block 6: Product Polish And Launch Readiness
 

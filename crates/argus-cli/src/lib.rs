@@ -9,6 +9,7 @@ pub mod harness;
 pub mod memory;
 pub mod plans;
 pub mod project;
+pub mod repair;
 pub mod repo_map;
 pub mod review;
 pub mod route_runner;

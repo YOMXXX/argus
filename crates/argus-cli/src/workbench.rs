@@ -8,6 +8,7 @@ use crate::harness::{run_task_through_harness, HarnessRunOutput};
 use crate::memory::{append_lesson, load_memory_preview};
 use crate::plans::{complete_current_step, create_plan, load_plan_status, queue_next_step};
 use crate::project::{detect_project, init_project, ProjectProfile};
+use crate::repair::build_repair_task;
 use crate::repo_map::load_repo_map;
 use crate::review::{load_change_review, record_review_decision};
 use crate::route_runner::{run_task_through_route, RouteRunOutput};
@@ -349,7 +350,9 @@ impl WorkbenchApp {
         match command {
             "/verify" | "/check" | "/test" => {
                 if let Err(err) = self.run_verify_gate() {
-                    self.status = format!("Verification failed: {err}");
+                    if !self.status.contains("Repair task queued") {
+                        self.status = format!("Verification failed: {err}");
+                    }
                 }
             }
             "/ask" | "/add" | "/code" => self.queue_task_text(&args.join(" ")),
@@ -1329,13 +1332,31 @@ impl WorkbenchApp {
             Ok(())
         } else {
             self.terminal_log.push("verification failed".into());
-            self.refresh_workflow_status_silent();
+            let repair_text = build_repair_task(&output.commands, &output.detail);
+            match queue_task(&self.profile.root, &repair_text) {
+                Ok(record) => {
+                    self.task_queue.push(record.clone());
+                    self.terminal_log
+                        .push(format!("repair task: {}", record.id));
+                    self.refresh_workflow_status_silent();
+                    self.record_cockpit_event(
+                        "repair",
+                        &format!("queued repair task: {}", record.id),
+                        "/run or /route-run",
+                    );
+                    self.status = format!("Verification failed. Repair task queued: {}", record.id);
+                }
+                Err(err) => {
+                    self.refresh_workflow_status_silent();
+                    self.status =
+                        format!("Verification failed; repair task could not be queued: {err}");
+                }
+            }
             self.record_cockpit_event(
                 "verify",
                 &format!("failed: {}", output.detail),
-                "/rework <task> or inspect terminal output",
+                "/run repair task or inspect terminal output",
             );
-            self.status = "Verification failed.".into();
             anyhow::bail!(output.detail)
         }
     }
@@ -2243,6 +2264,36 @@ mod tests {
             "{}",
             app.cockpit_journal
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_verify_failure_queues_repair_task() {
+        let dir = temp_dir("slash-verify-repair");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = app_with_root(dir.clone());
+        app.config.verify.commands = vec!["test -f missing.txt".into()];
+
+        for c in "/verify".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert_eq!(app.task_queue.len(), 1, "{:?}", app.task_queue);
+        assert!(
+            app.task_queue[0]
+                .text
+                .contains("Repair verification failure"),
+            "{:?}",
+            app.task_queue
+        );
+        assert!(
+            app.task_queue[0].text.contains("test -f missing.txt"),
+            "{:?}",
+            app.task_queue
+        );
+        assert!(app.status.contains("Repair task queued"), "{}", app.status);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
