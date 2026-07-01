@@ -82,6 +82,7 @@ dependencies = [
  "argus-trace",
  "async-trait",
  "clap",
+ "libc",
  "ratatui",
  "serde",
  "serde_json",

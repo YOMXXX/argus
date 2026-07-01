@@ -1,5 +1,6 @@
 use crate::background::{
-    clear_background_output, list_background_output, load_background_run, record_background_run,
+    append_background_output, clear_background_cancel, clear_background_output,
+    list_background_output, load_background_run, record_background_run, request_background_cancel,
     BackgroundRun,
 };
 use crate::checkpoints::{create_checkpoint, latest_checkpoint, restore_checkpoint};
@@ -54,6 +55,7 @@ pub enum WorkbenchMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PaletteAction {
     RunLatestTask,
+    StopBackgroundRun,
     Verify,
     Memory,
     History,
@@ -110,6 +112,11 @@ const PALETTE_ITEMS: &[PaletteItem] = &[
         action: PaletteAction::NewTask,
         label: "New coding task",
         detail: "Focus the conversation input",
+    },
+    PaletteItem {
+        action: PaletteAction::StopBackgroundRun,
+        label: "Stop background run",
+        detail: "Request cancellation for the active harness process",
     },
 ];
 
@@ -304,6 +311,7 @@ impl WorkbenchApp {
                     self.terminal_log.push(format!("error: {err}"));
                 }
             }
+            PaletteAction::StopBackgroundRun => self.stop_background_run(),
             PaletteAction::Verify => {
                 if let Err(err) = self.run_verify_gate() {
                     self.status = format!("Verification failed: {err}");
@@ -393,6 +401,7 @@ impl WorkbenchApp {
             "/rework" => self.queue_rework_task(&args.join(" ")),
             "/map" => self.refresh_repo_map(),
             "/eval" | "/evals" => self.refresh_eval_dashboard(),
+            "/stop" | "/cancel-run" | "/interrupt" => self.stop_background_run(),
             "/route-run" => {
                 let (cheap, strong) = self.route_models_from_args(&args);
                 if let Err(err) = self.run_latest_task_with_route(&cheap, &strong, route_runner) {
@@ -1041,9 +1050,16 @@ impl WorkbenchApp {
             "running" => {
                 self.status = format!("Background run active: {}", run.task_id);
             }
+            "canceling" => {
+                self.status = format!("Background run stopping: {}", run.task_id);
+            }
             "done" => {
                 self.refresh_after_background_run(&run);
                 self.status = format!("Background run done: {}", run.task_id);
+            }
+            "canceled" => {
+                self.refresh_after_background_run(&run);
+                self.status = format!("Background run canceled: {}", run.task_id);
             }
             "failed" => {
                 self.refresh_after_background_run(&run);
@@ -1170,6 +1186,47 @@ impl WorkbenchApp {
         self.start_latest_task_background_with(|root, task| run_task_through_harness(&root, &task))
     }
 
+    fn stop_background_run(&mut self) {
+        let Ok(Some(run)) = load_background_run(&self.profile.root) else {
+            self.active_pane = WorkbenchPane::Terminal;
+            self.status = "No active background run to stop.".into();
+            self.terminal_log
+                .push("No active background run to stop.".into());
+            return;
+        };
+        if !matches!(run.status.as_str(), "running" | "canceling") {
+            self.active_pane = WorkbenchPane::Terminal;
+            self.status = format!("No active background run to stop: {}", run.status);
+            self.terminal_log
+                .push(format!("No active background run to stop: {}", run.status));
+            return;
+        }
+        let detail = format!("stop requested for task {}", run.task_id);
+        match request_background_cancel(&self.profile.root, &run.task_id, "user requested stop") {
+            Ok(_) => {
+                if let Ok(state) = record_background_run(
+                    &self.profile.root,
+                    &run.task_id,
+                    "canceling",
+                    &detail,
+                    run.trace.clone(),
+                ) {
+                    self.background_run_seen = Some(background_run_marker(&state));
+                }
+                let _ = append_background_output(&self.profile.root, "system", &detail);
+                self.active_pane = WorkbenchPane::Terminal;
+                self.terminal_log.push(detail.clone());
+                self.record_cockpit_event("background", &detail, "wait for canceled status");
+                self.status = format!("Stop requested: {}", run.task_id);
+            }
+            Err(err) => {
+                self.active_pane = WorkbenchPane::Terminal;
+                self.status = format!("Could not stop background run: {err}");
+                self.terminal_log.push(format!("error: {err}"));
+            }
+        }
+    }
+
     pub fn start_latest_task_background_with<F>(&mut self, runner: F) -> Result<()>
     where
         F: FnOnce(PathBuf, TaskRecord) -> Result<HarnessRunOutput> + Send + 'static,
@@ -1185,6 +1242,7 @@ impl WorkbenchApp {
             &format!("before task {} background run", task.id),
         )?;
         clear_background_output(&self.profile.root)?;
+        clear_background_cancel(&self.profile.root)?;
         self.background_output_seen = 0;
         let trace = PathBuf::from(".argus/tasks").join(format!("{}.trace.jsonl", task.id));
         let state = record_background_run(
@@ -1215,11 +1273,13 @@ impl WorkbenchApp {
             let result = runner(root.clone(), task);
             match result {
                 Ok(output) => {
+                    let status = output.status.clone();
+                    let detail = format!("task {} completed with status {status}", output.task_id);
                     let _ = record_background_run(
                         &root,
                         &output.task_id,
-                        "done",
-                        &format!("task {} completed with status done", output.task_id),
+                        &status,
+                        &detail,
                         Some(output.trace),
                     );
                 }
@@ -1966,6 +2026,7 @@ Slash commands\n\
 /code    Queue a coding task\n\
 /run     Run latest queued task\n\
 /continue Run latest queued task\n\
+/stop    Stop active background run\n\
 /route-run Route latest task through cheap/strong models\n\
 /map     Refresh repo map\n\
 /evals   Refresh eval dashboard\n\
@@ -2714,6 +2775,48 @@ mod tests {
     }
 
     #[test]
+    fn slash_stop_requests_active_background_cancel() {
+        let dir = temp_dir("slash-stop");
+        std::fs::create_dir_all(&dir).unwrap();
+        let task = queue_task(&dir, "long running edit").unwrap();
+        crate::background::record_background_run(
+            &dir,
+            &task.id,
+            "running",
+            "task is still running",
+            Some(PathBuf::from(".argus/tasks/long.trace.jsonl")),
+        )
+        .unwrap();
+        let seed = app_with_root(dir.clone());
+        let mut app = WorkbenchApp::load(seed.profile, seed.config).unwrap();
+
+        for c in "/stop".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        let request = crate::background::load_background_cancel(&dir)
+            .unwrap()
+            .unwrap();
+        let state = crate::background::load_background_run(&dir)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(request.task_id, task.id);
+        assert_eq!(state.status, "canceling");
+        assert!(app.status.contains("Stop requested"), "{}", app.status);
+        assert!(
+            app.terminal_log
+                .iter()
+                .any(|line| line.contains("stop requested")),
+            "{:?}",
+            app.terminal_log
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn slash_retry_requeues_task() {
         let dir = temp_dir("slash-retry");
         std::fs::create_dir_all(&dir).unwrap();
@@ -3425,6 +3528,58 @@ mod tests {
 
         let terminal = app.terminal_log.join("\n");
         assert!(terminal.contains("[stdout] new run"), "{terminal}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn background_completion_preserves_canceled_status() {
+        let dir = temp_dir("background-canceled");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            "{\"scripts\":{\"test\":\"echo ok\"}}\n",
+        )
+        .unwrap();
+        let record = queue_task(&dir, "cancel me").unwrap();
+        let seed = app_with_root(dir.clone());
+        let mut app = WorkbenchApp::load(seed.profile, seed.config).unwrap();
+
+        app.start_latest_task_background_with(|root, task| {
+            crate::tasks::update_task_status(&root, &task.id, "canceled").unwrap();
+            Ok(HarnessRunOutput {
+                task_id: task.id.clone(),
+                task_text: task.text.clone(),
+                status: "canceled".into(),
+                trace: PathBuf::from(".argus/tasks/canceled.trace.jsonl"),
+                stdout: "stopped".into(),
+                stderr: String::new(),
+            })
+        })
+        .unwrap();
+
+        let mut state = None;
+        for _ in 0..40 {
+            app.tick();
+            state = crate::background::load_background_run(&dir).unwrap();
+            if state
+                .as_ref()
+                .is_some_and(|state| state.status == "canceled")
+            {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        let state = state.expect("background run status should exist");
+
+        assert_eq!(state.task_id, record.id);
+        assert_eq!(state.status, "canceled", "{state:?}");
+        assert!(
+            app.status.contains("Background run canceled"),
+            "{}",
+            app.status
+        );
+        assert_eq!(list_tasks(&dir).unwrap()[0].status, "canceled");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

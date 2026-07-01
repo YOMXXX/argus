@@ -8,7 +8,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const BACKGROUND_RUN_PATH: &str = ".argus/cockpit/background-run.json";
 const BACKGROUND_OUTPUT_PATH: &str = ".argus/cockpit/background-output.jsonl";
+const BACKGROUND_CANCEL_PATH: &str = ".argus/cockpit/background-cancel.json";
 static BACKGROUND_OUTPUT_LOCK: Mutex<()> = Mutex::new(());
+static BACKGROUND_CANCEL_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BackgroundRun {
@@ -26,12 +28,23 @@ pub struct BackgroundOutput {
     pub created_ms: u128,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BackgroundCancel {
+    pub task_id: String,
+    pub reason: String,
+    pub requested_ms: u128,
+}
+
 pub fn background_run_path(root: &Path) -> PathBuf {
     root.join(BACKGROUND_RUN_PATH)
 }
 
 pub fn background_output_path(root: &Path) -> PathBuf {
     root.join(BACKGROUND_OUTPUT_PATH)
+}
+
+pub fn background_cancel_path(root: &Path) -> PathBuf {
+    root.join(BACKGROUND_CANCEL_PATH)
 }
 
 pub fn record_background_run(
@@ -116,6 +129,55 @@ pub fn clear_background_output(root: &Path) -> Result<()> {
     let _guard = BACKGROUND_OUTPUT_LOCK
         .lock()
         .map_err(|_| anyhow::anyhow!("background output lock poisoned"))?;
+    if path.exists() {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+pub fn request_background_cancel(
+    root: &Path,
+    task_id: &str,
+    reason: &str,
+) -> Result<BackgroundCancel> {
+    let record = BackgroundCancel {
+        task_id: normalize(task_id),
+        reason: normalize(reason),
+        requested_ms: now_ms(),
+    };
+    let path = background_cancel_path(root);
+    let _guard = BACKGROUND_CANCEL_LOCK
+        .lock()
+        .map_err(|_| anyhow::anyhow!("background cancel lock poisoned"))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, serde_json::to_string_pretty(&record)?)?;
+    Ok(record)
+}
+
+pub fn load_background_cancel(root: &Path) -> Result<Option<BackgroundCancel>> {
+    let path = background_cancel_path(root);
+    let _guard = BACKGROUND_CANCEL_LOCK
+        .lock()
+        .map_err(|_| anyhow::anyhow!("background cancel lock poisoned"))?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let text = std::fs::read_to_string(path)?;
+    Ok(Some(serde_json::from_str(&text)?))
+}
+
+pub fn background_cancel_requested(root: &Path, task_id: &str) -> Result<bool> {
+    let task_id = normalize(task_id);
+    Ok(load_background_cancel(root)?.is_some_and(|request| request.task_id == task_id))
+}
+
+pub fn clear_background_cancel(root: &Path) -> Result<()> {
+    let path = background_cancel_path(root);
+    let _guard = BACKGROUND_CANCEL_LOCK
+        .lock()
+        .map_err(|_| anyhow::anyhow!("background cancel lock poisoned"))?;
     if path.exists() {
         std::fs::remove_file(path)?;
     }
@@ -217,6 +279,25 @@ mod tests {
 
         let records = list_background_output(&dir).unwrap();
         assert!(records.is_empty(), "{records:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn background_cancel_request_roundtrips_and_clears() {
+        let dir = temp_dir("cancel");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        request_background_cancel(&dir, " task-1 ", " user pressed stop ").unwrap();
+        let request = load_background_cancel(&dir).unwrap().unwrap();
+
+        assert_eq!(request.task_id, "task-1");
+        assert_eq!(request.reason, "user pressed stop");
+        assert!(background_cancel_requested(&dir, "task-1").unwrap());
+        assert!(!background_cancel_requested(&dir, "task-2").unwrap());
+
+        clear_background_cancel(&dir).unwrap();
+        assert!(load_background_cancel(&dir).unwrap().is_none());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

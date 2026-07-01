@@ -30,3 +30,4 @@ serde_json = { workspace = true }
 toml = "0.8"
 ratatui.workspace = true
 async-trait.workspace = true
+libc.workspace = true
