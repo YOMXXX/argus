@@ -31,6 +31,7 @@
 - Added agent-compatibility aliases, combined rule-file import, and `arguscode health` compatibility reporting.
 - Added a durable Workbench planning engine with `/plan`, `/next`, and `/done` backed by `.argus/plans/current.json`.
 - Added verify-failure classification and automatic Workbench repair task generation.
+- Added launch readiness checks via `arguscode launch` and Workbench `/launch`.
 - Updated release packaging and installer support so archives install both `argus` and `arguscode`.
 
 ## 0.1.1 - 2026-06-30

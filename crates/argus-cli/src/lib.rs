@@ -6,6 +6,7 @@ pub mod diff;
 pub mod eval_dashboard;
 pub mod eval_runner;
 pub mod harness;
+pub mod launch;
 pub mod memory;
 pub mod plans;
 pub mod project;

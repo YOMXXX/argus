@@ -5,6 +5,7 @@ use crate::diff::load_diff_preview;
 use crate::eval_dashboard::load_eval_dashboard;
 use crate::eval_runner::{run_eval_suite, EvalRunOutput};
 use crate::harness::{run_task_through_harness, HarnessRunOutput};
+use crate::launch::{load_launch_checklist, render_launch_checklist};
 use crate::memory::{append_lesson, load_memory_preview};
 use crate::plans::{complete_current_step, create_plan, load_plan_status, queue_next_step};
 use crate::project::{detect_project, init_project, ProjectProfile};
@@ -368,6 +369,7 @@ impl WorkbenchApp {
             "/plan" => self.create_work_plan(&args.join(" ")),
             "/next" => self.queue_next_plan_step(),
             "/done" => self.complete_plan_step(&args.join(" ")),
+            "/launch" | "/readiness" => self.show_launch_readiness(),
             "/review" | "/patch" => self.refresh_change_review(),
             "/accept" => self.accept_change_review(&args.join(" ")),
             "/rework" => self.queue_rework_task(&args.join(" ")),
@@ -527,6 +529,24 @@ impl WorkbenchApp {
             }
             Err(err) => {
                 self.status = format!("Could not complete plan step: {err}");
+            }
+        }
+    }
+
+    fn show_launch_readiness(&mut self) {
+        self.active_pane = WorkbenchPane::Terminal;
+        match load_launch_checklist(&self.profile.root) {
+            Ok(checks) => {
+                self.terminal_log = vec![render_launch_checklist(&checks)];
+                let ready = checks
+                    .iter()
+                    .filter(|check| check.status == "ready")
+                    .count();
+                self.status = format!("Launch readiness: {ready}/{} ready", checks.len());
+            }
+            Err(err) => {
+                self.terminal_log = vec![format!("Could not load launch checklist: {err}")];
+                self.status = format!("Could not load launch checklist: {err}");
             }
         }
     }
@@ -1789,6 +1809,7 @@ Slash commands\n\
 /plan    Create a durable work plan\n\
 /next    Queue the next plan step\n\
 /done    Complete the current plan step with evidence\n\
+/launch  Show launch readiness checklist\n\
 /diff    Refresh diff preview\n\
 /review  Refresh change review\n\
 /patch   Refresh patch review\n\
@@ -2388,6 +2409,31 @@ mod tests {
             app.plan_status.contains("cargo test passed"),
             "{}",
             app.plan_status
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn slash_launch_shows_readiness_checklist() {
+        let dir = temp_dir("slash-launch");
+        std::fs::create_dir_all(dir.join(".github/workflows")).unwrap();
+        std::fs::write(dir.join(".github/workflows/ci.yml"), "name: CI\n").unwrap();
+        std::fs::write(dir.join("README.md"), "# Demo\n").unwrap();
+        let mut app = app_with_root(dir.clone());
+
+        for c in "/launch".chars() {
+            handle_key(&mut app, KeyCode::Char(c), KeyModifiers::empty());
+        }
+        handle_key(&mut app, KeyCode::Enter, KeyModifiers::empty());
+
+        assert_eq!(app.active_pane, WorkbenchPane::Terminal);
+        let terminal = app.terminal_log.join("\n");
+        assert!(terminal.contains("Launch Readiness"), "{terminal}");
+        assert!(terminal.contains("[ready] CI workflow"), "{terminal}");
+        assert!(
+            terminal.contains("[missing] Benchmark result"),
+            "{terminal}"
         );
 
         let _ = std::fs::remove_dir_all(&dir);

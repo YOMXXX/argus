@@ -527,6 +527,38 @@ fn arguscode_history_lists_completed_harness_runs() {
 }
 
 #[test]
+fn arguscode_launch_reports_readiness_checklist() {
+    let dir = std::env::temp_dir().join(format!("arguscode-launch-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join(".github/workflows")).unwrap();
+    std::fs::create_dir_all(dir.join("scripts")).unwrap();
+    std::fs::create_dir_all(dir.join("launch")).unwrap();
+    std::fs::write(dir.join(".github/workflows/ci.yml"), "name: CI\n").unwrap();
+    std::fs::write(dir.join("README.md"), "# Demo\n").unwrap();
+    std::fs::write(dir.join("CHANGELOG.md"), "# Changelog\n").unwrap();
+    std::fs::write(dir.join("install.sh"), "#!/bin/sh\n").unwrap();
+    std::fs::write(dir.join("scripts/package-release.sh"), "#!/bin/sh\n").unwrap();
+    std::fs::write(dir.join("launch/demo-script.md"), "# Demo\n").unwrap();
+
+    let out = Command::new(arguscode_bin())
+        .arg("launch")
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+
+    assert!(out.status.success(), "arguscode launch failed: {out:?}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Launch Readiness"), "stdout: {stdout}");
+    assert!(stdout.contains("[ready] CI workflow"), "stdout: {stdout}");
+    assert!(
+        stdout.contains("[missing] Benchmark result"),
+        "stdout: {stdout}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn fork_reruns_task_from_trace() {
     let dir = std::env::temp_dir().join(format!("argus-fork-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

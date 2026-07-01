@@ -135,6 +135,7 @@ arguscode
 # Review the result with /review or /patch, then /accept <note> or /rework <follow-up task>.
 # Refresh codebase shape with /map for top directories, extensions, rules, and verify commands.
 # Inspect eval suites with /evals, then run smoke or a suite path with /eval-run.
+# Check launch readiness with /launch or `arguscode launch`.
 
 # Generate config, project memory, and a smoke eval without opening the TUI.
 arguscode init
@@ -146,6 +147,7 @@ arguscode resume --run
 arguscode verify
 arguscode check
 arguscode health
+arguscode launch
 arguscode history
 
 # Use an OpenAI-compatible provider profile without writing keys to config.

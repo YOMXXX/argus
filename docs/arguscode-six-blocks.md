@@ -63,3 +63,4 @@ Make the first `arguscode` session feel sharp.
 - Stronger visual hierarchy, empty states, command palette labels, and help text.
 - Updated README, changelog, demo script, benchmark notes, and launch material.
 - Release checklist tied to CI, installer, docs, and demo artifacts.
+- First slice: `arguscode launch` and Workbench `/launch` render readiness checks for CI, release, docs, installer, demo, and benchmark artifacts.

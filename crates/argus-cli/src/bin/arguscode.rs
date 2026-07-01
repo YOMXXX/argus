@@ -1,6 +1,7 @@
 use anyhow::Result;
 use argus_cli::compatibility::render_agent_compatibility;
 use argus_cli::harness::{run_task_through_harness, HarnessRunOutput};
+use argus_cli::launch::{load_launch_checklist, render_launch_checklist};
 use argus_cli::project::{detect_project, init_project, init_report_text};
 use argus_cli::sessions::list_sessions;
 use argus_cli::tasks::{latest_resumable_task, list_tasks, queue_task, TaskRecord};
@@ -69,6 +70,9 @@ enum Commands {
     /// Check local project readiness for ArgusCode.
     #[command(alias = "health", alias = "compat")]
     Doctor,
+    /// Print launch readiness checks for docs, CI, installer, demo, and benchmarks.
+    #[command(alias = "readiness")]
+    Launch,
 }
 
 #[derive(Subcommand)]
@@ -126,6 +130,7 @@ async fn main() -> Result<()> {
         Commands::Provider { command } => provider_command(&cwd, command),
         Commands::History => history(&cwd),
         Commands::Doctor => doctor(&cwd),
+        Commands::Launch => launch(&cwd),
     }
 }
 
@@ -367,6 +372,12 @@ fn doctor(cwd: &std::path::Path) -> Result<()> {
     );
     println!();
     println!("{}", render_agent_compatibility(&profile.root));
+    Ok(())
+}
+
+fn launch(cwd: &std::path::Path) -> Result<()> {
+    let checks = load_launch_checklist(cwd)?;
+    println!("{}", render_launch_checklist(&checks));
     Ok(())
 }
 
